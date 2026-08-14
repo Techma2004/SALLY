@@ -30,3 +30,12 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Calabar")
 DEFAULT_COUNTRY = os.getenv("DEFAULT_COUNTRY", "NG")
+
+
+from pathlib import Path
+
+# Project root = ~/programming/projects/SALLY
+PROJECT_ROOT = Path(__file__).parent.parent
+
+VOICE_MODEL_PATH = PROJECT_ROOT / os.getenv("VOICE_MODEL_PATH", "models/voices/en_US-lessac-medium.onnx")
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
