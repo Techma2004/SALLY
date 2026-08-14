@@ -1,0 +1,17 @@
+# Secrets & Memory
+.env
+memory.json
+*.log
+
+# Models are huge, don't push them
+models/
+*.gguf
+*.bin
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

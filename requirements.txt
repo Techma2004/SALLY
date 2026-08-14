@@ -1,0 +1,7 @@
+llama-cpp-python
+python-dotenv
+requests
+pyttsx3
+fastapi
+uvicorn
+think
