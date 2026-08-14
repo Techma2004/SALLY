@@ -10,5 +10,12 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp.env.example.env
+
 # Edit.env with your keys
+
+# --- API KEYS ---
+# Get free: https://openweathermap.org/api
+
+# Get free: https://newsapi.org
+
 python main.py

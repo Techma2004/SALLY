@@ -2,7 +2,7 @@ from core.brain import think
 from core.voice import speak
 from core.memory import load_memory, save_memory
 
-print("--- SALLY v0.1 Online on Debian ---")
+print("--- SALLY v0.24 Online on Debian ---")
 print("Type 'exit' to quit")
 
 history = load_memory()
