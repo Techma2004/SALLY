@@ -37,7 +37,7 @@ def get_stt_model():
     return stt_model
 
 def speak(text: str):
-    print(f"SALLY: {text}")
+    print(text)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         wav_path = f.name
 

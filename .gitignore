@@ -15,3 +15,10 @@ __pycache__/
 
 # OS
 .DS_Store
+EOF
+
+
+models/.gguf models/.bin
+models/voices/.onnx models/whisper-/
+
+memory.json

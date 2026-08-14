@@ -5,7 +5,7 @@ import re
 
 print(f"[SALLY] Loading {LLM_MODEL_PATH}...")
 llm = Llama(
-    model_path=LLM_MODEL_PATH,
+    model_path=str(LLM_MODEL_PATH),
     n_ctx=LLM_N_CTX,
     n_threads=LLM_N_THREADS,
     verbose=False
@@ -34,13 +34,17 @@ def think(prompt, history=[]):
         clean_args = {k: v for k, v in tool_args.items() if v}
         try:
             result = func(**clean_args)
-            tool_context = f"\nSYSTEM: LIVE DATA FROM TOOL {tool_name}: {result}\nYou MUST use this data in your answer. Do not say you can't access internet."
+            tool_context = f"\nSYSTEM LIVE DATA FROM TOOL {tool_name}: {result}\nYou MUST use this data. Never say you can't access internet."
         except Exception as e:
             tool_context = f"\n[TOOL ERROR]: {e}"
 
     full_prompt = prompt + tool_context
 
-    messages = [{"role": "system", "content": PERSONALITY}]
+    # Strong identity lock - 2 system messages
+    messages = [
+        {"role": "system", "content": PERSONALITY},
+        {"role": "system", "content": "REMINDER: Your name is SALLY. You are NOT JARVIS. You are SALLY built by Edima  Bassey."}
+    ]
     messages.extend(history)
     messages.append({"role": "user", "content": full_prompt})
 
@@ -51,4 +55,10 @@ def think(prompt, history=[]):
         stop=["<|eot_id|>", "<|im_end|>"]
     )
 
-    return output["choices"][0]["message"]["content"]
+    answer = output["choices"][0]["message"]["content"]
+    # Final safety filter
+    answer = answer.replace("JARVIS", "SALLY")
+    answer = answer.replace("I am an AI language model", "I am SALLY")
+    answer = answer.replace("I am a language model", "I am SALLY")
+
+    return answer

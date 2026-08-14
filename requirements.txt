@@ -5,3 +5,7 @@ pyttsx3
 fastapi
 uvicorn
 think
+faster-whisper
+piper-tts 
+sounddevice 
+soundfile
