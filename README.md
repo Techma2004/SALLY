@@ -8,7 +8,7 @@
 ![Python](https://img.shields.io/badge/Python-3.13-blue)
 ![Debian](https://img.shields.io/badge/Debian-13_Trixie-red)
 ![Offline](https://img.shields.io/badge/Offline-100%25-green)
-![Version](https://img.shields.io/badge/Version-v0.35%20Voice-purple
+![Version](https://img.shields.io/badge/Version-v0.35%20Voice-purple)
 
 > Offline-first, private, voice-enabled personal AI assistant. Built by **Edima Bassey** on Debian. Runs 100% locally with `llama.cpp`, `Piper TTS`, and `faster-whisper`. No cloud.
 
