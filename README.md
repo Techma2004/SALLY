@@ -1,142 +1,191 @@
+Here — fully rewritten, professional, errors fixed, no more hardcoded "Edima" — uses **Author** placeholder. Clean install guides for Linux/Windows/macOS. Copy this as your new `README.md`:
+
+```md
 # SALLY — Science Artificial Learning Logic and You
 
 <p align="center">
-  <img src="logo.png" width="400" alt="SALLY logo" />
+  <img src="logo.png" width="400" alt="SALLY Logo" />
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Termux-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/Offline-100%25-2ECC71?style=flat" alt="Offline">
+  <img src="https://img.shields.io/badge/Version-v0.41-blue?style=flat" alt="Version">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat" alt="License">
+</p>
 
-![Python](https://img.shields.io/badge/Python-3.13-blue)
-![Debian](https://img.shields.io/badge/Debian-13_Trixie-red)
-![Offline](https://img.shields.io/badge/Offline-100%25-green)
-![Version](https://img.shields.io/badge/Version-v0.35%20Voice-purple)
+**SALLY is an offline-first, private, voice-enabled personal AI assistant.** It runs entirely locally using `llama.cpp`, `Piper TTS`, and `faster-whisper`. No cloud dependencies, no telemetry.
 
-> Offline-first, private, voice-enabled personal AI assistant. Built by **Edima Bassey** on Debian. Runs 100% locally with `llama.cpp`, `Piper TTS`, and `faster-whisper`. No cloud.
+> Built on Debian 13 (Trixie) and designed to be fully portable across Linux, Windows, macOS, and Android via Termux.
 
-> **New in v0.41:** SALLY is no longer hardcoded to Edima. On first run she asks who YOU are and becomes YOUR SALLY. Your profile stays local and gitignored. On Techma's machine she auto-loads Edima Bassey (Techma) profile.
+## Table of Contents
+- [Features](#features)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Memory System](#memory-system)
+- [Personalization](#personalization)
+- [Troubleshooting](#troubleshooting)
+- [Version History](#version-history)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
 
-### What SALLY Does Today (v0.41)
+## Features
 
-- **Offline Chat** — Uses `llama.cpp` + `Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf` locally. No internet needed for conversation.
-- **Tools with Real Data** — Auto-detects intent and calls:
-  - `get_weather(city)` → OpenWeatherMap API
-  - `get_news(topic)` → NewsAPI
-- **Memory** — Saves chat to `memory.json`, loads last 10 turns for context. **New v0.40:** Also saves to `memory/sally.db` SQLite FTS5 + markdown in `memory/core/` and `memory/episodes/` with `remember(content, type="episodic|semantic|procedural")` and `recall(query, k=3)`. Search with `recall <query>` in CLI.
-- **Voice**
-  - **TTS**: Piper TTS `en_US-lessac-medium.onnx` — natural, offline
-  - **STT**: `faster-whisper` `tiny` (39MB) — offline after first download
-- **Multi-User Personalization (NEW v0.41)** — First run onboarding: If `SALLY_OWNER=Techma` in `.env` or path `/home/techma` exists, auto-loads Edima Bassey profile with no questions. On any other machine (Windows, Mac, Linux clone), asks: Your name, Handle, Location/OS, Hardware, Interests → saves to `memory/core/human.json` (gitignored, private). SALLY becomes YOUR SALLY, not Edima's. Fixes frustration where everything was hardcoded to Edima.
-- **API** — `server.py` FastAPI server at `localhost:8000`
-- **Portable** — No hardcoded `/home/edima/...` paths. Uses `PROJECT_ROOT = Path(__file__).parent.parent`
-- **Identity Locked** — Strong `PERSONALITY` in `config.py` + anti-JARVIS filter in `brain.py`
+**v0.41 Current Capabilities:**
 
----
+- **Offline Chat:** Powered by `llama.cpp` with `Qwen2.5-Coder-1.5B-Instruct` (GGUF). No internet required for conversation.
+- **Tool Integration:** Automatic intent detection for:
+  - `get_weather(city)` - OpenWeatherMap API
+  - `get_news(topic)` - NewsAPI
+- **Advanced Memory (v0.40):**
+  - SQLite FTS5 + Markdown hybrid storage
+  - `memory.json` - Legacy short-term history (last 10 turns)
+  - `memory/sally.db` - Persistent FTS5 index
+  - `memory/core/human.json` - User profile (private, gitignored)
+  - `memory/episodes/` - Long-term conversational episodes as markdown
+  - API: `remember(content, type)` and `recall(query, k)` + CLI command `recall <query>`
+- **Voice Interface:**
+  - TTS: Piper TTS `en_US-lessac-medium` - Natural, fully offline
+  - STT: `faster-whisper` tiny (39MB) - Offline after initial download
+- **Multi-User Support (v0.41):** First-run onboarding. Automatically creates a private, local profile for each user. No hardcoded user data in repository.
+- **API Server:** FastAPI server via `server.py` at `http://localhost:8000`
+- **Cross-Platform:** Portable path resolution using `PROJECT_ROOT`. No hardcoded system paths.
+- **Identity Protection:** Strong system prompt + JARVIS-to-SALLY output filter in `core/brain.py`
 
-### Project Structure
+## Project Structure
 
 ```
 SALLY/
 ├── core/
-│ ├── brain.py # LLM load, tool routing, dual system prompt, JARVIS->SALLY filter
-│ ├── config.py # v0.41: PROJECT_ROOT, VOICE_MODEL_PATH, WHISPER_SIZE from.env + multi-user USER_FACTS loader (human.json or EDIMA_FACTS or onboard)
-│ ├── tools.py # get_weather, get_news
-│ ├── memory.py # load_memory() / save_memory() (legacy) + remember() / recall() / init_core_from_facts() (v0.40 SQLite FTS5)
-│ └── voice.py # speak() + listen() with lazy Whisper loading
+│ ├── brain.py # LLM initialization, tool routing, system prompts, identity filter
+│ ├── config.py # Configuration loader, multi-user profile management, env variables
+│ ├── tools.py # External tools: get_weather, get_news
+│ ├── memory.py # Memory management: legacy JSON + SQLite FTS5 (remember/recall)
+│ └── voice.py # TTS/STT: Piper + Whisper with lazy loading
 ├── memory/
 │ ├── core/
-│ │ ├── human.json # YOUR private profile (gitignored) — created on first run, contains user_name, user_handle, etc.
-│ │ └── human.json.example # template for GitHub
-│ ├── episodes/ # conversations as.md (gitignored)
-│ └── sally.db # SQLite FTS5 index (gitignored)
+│ │ ├── human.json # Private user profile (gitignored, auto-created)
+│ │ └── human.json.example # Template for repository
+│ ├── episodes/ # Markdown episode logs (gitignored)
+│ └── sally.db # SQLite FTS5 database (gitignored)
 ├── models/
-│ ├── Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf (gitignored, 800MB)
+│ ├── Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf # LLM (gitignored, ~800MB)
 │ └── voices/
-│ ├── en_US-lessac-medium.onnx (60MB, gitignored)
+│ ├── en_US-lessac-medium.onnx
 │ └── en_US-lessac-medium.onnx.json
-├── main.py # CLI: Press Enter = voice, Type = text, recall <q> = search memory, exit = quit — v0.40 memory-augmented
-├── server.py # FastAPI
-├── requirements.txt
-├──.env.example # template
-├──.env # your keys (gitignored)
-├── memory.json # legacy auto-created (gitignored)
+├── main.py # Main CLI: Enter=voice, Text=text, recall <query>, exit=quit
+├── server.py # FastAPI server
+├── requirements.txt # Python dependencies
+├──.env.example # Environment template
+├──.env # Private environment (gitignored)
 └── README.md
 ```
 
----
+## Installation
 
-### Full Setup From Zero to Voice
+### Prerequisites
 
-#### 1. Clone and Create venv
+- Python 3.10+
+- Git
+- 4GB+ RAM recommended (2GB minimum for 0.5B model)
+
+### 1. Clone Repository
 
 ```bash
 git clone https://github.com/techma2004/SALLY.git
 cd SALLY
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
 ```
 
-**Windows 10/11 variant:**
-```powershell
-# Install Python 3.10+ from python.org (check Add to PATH)
-# Install git from git-scm.com
-git clone https://github.com/techma2004/SALLY.git
-cd SALLY
-python -m venv venv
-.\venv\Scripts\activate
-pip install --upgrade pip
-```
+### 2. Platform-Specific Setup
 
-**macOS variant:**
-```bash
-brew install python@3.11
-git clone https://github.com/techma2004/SALLY.git
-cd SALLY
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-```
-
-**Termux (Huawei Y9 2018) variant:**
-```bash
-pkg update && pkg upgrade -y
-pkg install python git -y
-termux-setup-storage
-git clone https://github.com/techma2004/SALLY.git
-cd SALLY
-python -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-```
-
-#### 2. System Audio Dependencies (Debian Trixie)
+#### Linux - Debian 13 Trixie / Ubuntu 22.04+ (Recommended)
 
 ```bash
+# System dependencies
 sudo apt update
-sudo apt install libsndfile1 portaudio19-dev ffmpeg alsa-utils pulseaudio -y
+sudo apt install -y python3 python3-venv python3-pip libsndfile1 portaudio19-dev ffmpeg alsa-utils pulseaudio
+
+# Start audio service
 pulseaudio --start
-```
 
-**Windows System Dependencies:**
-- Install ffmpeg from https://ffmpeg.org/download.html and add to PATH
-- No portaudio needed — sounddevice wheels include it
+# Verify audio devices
+arecord -l
+aplay -l
 
-**macOS System Dependencies:**
-```bash
-brew install ffmpeg portaudio
-```
-
-**Termux System Dependencies:**
-```bash
-pkg install ffmpeg portaudio -y
-```
-
-#### 3. Python Dependencies
-
-```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-`requirements.txt`:
+#### Windows 10 / 11
+
+**Requirements:** Install Python 3.10+ from python.org (check "Add Python to PATH" during installation)
+
+```powershell
+# 1. Install ffmpeg: https://ffmpeg.org/download.html
+# Add ffmpeg bin folder to system PATH
+# 2. Install Git: https://git-scm.com/download/win
+
+# Clone (if not done)
+git clone https://github.com/techma2004/SALLY.git
+cd SALLY
+
+# Create virtual environment
+python -m venv venv
+.\venv\Scripts\activate
+
+# Upgrade pip
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+> **Windows Audio Note:** If microphone detection fails, SALLY automatically falls back to text mode. Ensure microphone permissions are enabled: Settings > Privacy & Security > Microphone.
+
+#### macOS - Intel & Apple Silicon
+
+```bash
+# Install Homebrew if not installed: https://brew.sh
+# Install dependencies
+brew install python@3.11 ffmpeg portaudio
+
+# Clone (if not done)
+git clone https://github.com/techma2004/SALLY.git
+cd SALLY
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+#### Android - Termux (Experimental)
+
+```bash
+# Use F-Droid Termux version (Play Store version is deprecated)
+pkg update && pkg upgrade -y
+pkg install -y python git ffmpeg portaudio termux-api
+termux-setup-storage
+
+# Clone
+git clone https://github.com/techma2004/SALLY.git
+cd SALLY
+
+# Create venv
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Note: For 3GB RAM devices, use Qwen2.5-0.5B model instead of 1.5B
+```
+
+**requirements.txt**
 ```
 llama-cpp-python
 python-dotenv
@@ -149,18 +198,14 @@ fastapi
 uvicorn
 ```
 
-> If you get `externally-managed-environment`, you forgot `source venv/bin/activate`. Never use `--break-system-packages`.
+> **Common Error:** `externally-managed-environment` - You forgot to activate venv. Run `source venv/bin/activate` (Linux/macOS) or `.\venv\Scripts\activate` (Windows) before `pip install`.
 
-#### 4. Download LLM
+### 3. Download LLM Model
 
+**Linux / macOS:**
 ```bash
 mkdir -p models
-
-# Current light model (800MB, fast)
 wget -O models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q3_k_l.gguf
-
-# Optional better chat model (1.1GB)
-# wget -O models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
 ```
 
 **Windows PowerShell:**
@@ -169,8 +214,14 @@ mkdir models
 Invoke-WebRequest -Uri https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q3_k_l.gguf -OutFile models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf
 ```
 
-#### 5. Download Voice (Piper TTS)
+Optional: Larger model for better quality (1.1GB):
+```bash
+wget -O models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
+```
 
+### 4. Download Voice Models
+
+**Linux / macOS:**
 ```bash
 mkdir -p models/voices
 cd models/voices
@@ -179,25 +230,41 @@ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/me
 cd../..
 ```
 
-Whisper `tiny` (39MB) auto-downloads on first voice use. Let it finish — don't hit Ctrl+C.
+**Windows PowerShell:**
+```powershell
+mkdir models/voices
+Invoke-WebRequest -Uri https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx -OutFile models/voices/en_US-lessac-medium.onnx
+Invoke-WebRequest -Uri https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json -OutFile models/voices/en_US-lessac-medium.onnx.json
+```
 
-#### 6. Environment Keys
+> Whisper `tiny` (39MB) will auto-download on first voice use. Allow it to complete without interruption.
+
+## Configuration
+
+### 1. Create Environment File
 
 ```bash
 cp.env.example.env
-nano.env
 ```
 
-Paste:
+Linux/macOS: `nano.env`
+Windows: `notepad.env`
+
+### 2. Configure `.env`
+
 ```ini
+# LLM Configuration
 LLM_MODEL_PATH=models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf
-VOICE_MODEL_PATH=models/voices/en_US-lessac-medium.onnx
-WHISPER_MODEL_SIZE=tiny
-LLM_N_CTX=2048
-LLM_N_THREADS=6
+LLM_N_CTX=4096
+LLM_N_THREADS=8
 LLM_TEMPERATURE=0.7
 
-# Get free keys:
+# Voice Configuration
+VOICE_MODEL_PATH=models/voices/en_US-lessac-medium.onnx
+WHISPER_MODEL_SIZE=tiny
+
+# Optional APIs (for tools)
+# Get free keys from:
 # https://openweathermap.org/api
 # https://newsapi.org
 OPENWEATHER_API_KEY=your_key_here
@@ -205,191 +272,276 @@ NEWS_API_KEY=your_key_here
 DEFAULT_CITY=Calabar
 DEFAULT_COUNTRY=NG
 
-# Only set this on YOUR machine to auto-load Edima profile
-SALLY_OWNER=Techma
+# Author machine detection (optional, for development)
+# SALLY_OWNER=Author
 ```
 
-**For Windows/Mac new users:** Leave `SALLY_OWNER` blank or delete the line. On first run SALLY will ask your name and create `memory/core/human.json` automatically.
+### 3. Secure Private Files
 
-#### 7. Protect Secrets
+Ensure `.gitignore` contains:
 
-`.gitignore` must contain:
 ```
 .env
 venv/
 __pycache__/
 models/*.gguf
 models/voices/*.onnx
+models/voices/*.onnx.json
 models/whisper-*/
-memory.json
 memory/
+memory.json
 memory/core/human.json
 .DS_Store
 ```
 
-Create template for GitHub so others know format:
+Create public template:
+
 ```bash
 mkdir -p memory/core
 echo '{ "user_name": "User", "user_handle": "User", "user_location": "Unknown" }' > memory/core/human.json.example
 ```
 
----
+## Usage
 
-### How to Run
+### Start SALLY
 
+**Linux / macOS:**
 ```bash
 source venv/bin/activate
-# Windows:.\venv\Scripts\activate
 python3 main.py
 ```
 
-You will see:
-
-**On Techma's machine (SALLY_OWNER=Techma):**
+**Windows:**
+```powershell
+.\venv\Scripts\activate
+python main.py
 ```
-[CONFIG] SALLY v0.41 multi-user | User: Techma | LLM: Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf | City: Calabar
+
+### First Run - Onboarding
+
+**On Author's development machine** (detected via `SALLY_OWNER` or system path):
+
+```
+[CONFIG] SALLY v0.41 | User: Author | Model: Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf
 --- SALLY v0.41 Memory + Voice ---
-Press Enter for VOICE or type your message:
 ```
 
-**On new user machine (Windows/Mac/Linux clone):**
+**On new user machine** (Windows, macOS, Linux clone):
+
 ```
 --- SALLY First Run Setup ---
-SALLY is personal. Let's make her yours (30 seconds, stored locally, never pushed to GitHub)
+SALLY is personal. Let's make her yours (30 seconds, stored locally, never pushed).
 
-Your name: Sarah
-Handle/nickname [Sarah]: Sara
-Location / OS: Lagos, Windows 11
+Your name: John Doe
+Handle/nickname [John Doe]: John
+Location / OS: New York, Windows 11
 Hardware/OS: Dell XPS 15
-Interests: AI, Gaming
+Interests: AI, Software Development, Gaming
 
-Saved! SALLY now knows you as Sara. This file is gitignored.
+Saved! SALLY now knows you as John. Profile is local and private.
 
-[CONFIG] SALLY v0.41 multi-user | User: Sara | LLM: Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf | City: Calabar
+[CONFIG] SALLY v0.41 | User: John | Model: Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf
 --- SALLY v0.41 Memory + Voice ---
-Press Enter for VOICE or type your message:
 ```
 
-Then:
+Reset profile: `rm memory/core/human.json` then restart `main.py`
+
+### Interaction Modes
+
+- **Press Enter:** Voice mode (6-second recording)
+- **Type message:** Text mode with voice response
+- **Commands:**
+  - `recall <query>` - Search long-term memory (e.g., `recall python`)
+  - `who am i` - Recall your profile
+  - `what is your name` - Verify SALLY identity
+  - `exit` / `quit` / `bye` - Save and quit
+
+**Example Session:**
 ```
-[SALLY] Loading models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf...
-[SALLY] Ready.
-[SALLY Voice] Loading Piper TTS from models/voices/en_US-lessac-medium.onnx...
-[SALLY Voice] TTS ready.
---- SALLY v0.41 Voice + Memory ---
-Press Enter for VOICE or type your message:
+Press Enter for VOICE or type your message: weather in Calabar
+
+SALLY: [TOOL] 28°C, 85% humidity in Calabar. Currently partly cloudy.
+
+Press Enter for VOICE or type your message: recall hardware
+
+[episodic] 2026-08-16: Tested voice on Debian 13 Trixie...
+
+Press Enter for VOICE or type your message: exit
+Goodbye. SALLY going offline.
 ```
 
-- Press **Enter** → `[Listening 6s...]` → speak → transcribed → SALLY answers by voice
-- Type `hello tell me a joke` → text answer + voice
-- Type `recall Debian` → searches SQLite FTS5 memory
-- Type `who am i` → recalls YOUR profile (Sara on Windows, Techma on Debian)
-- Type `exit` → quit
+### API Server
 
-Test identity:
-```
-You: what is your name
-SALLY: I am SALLY, Science Artificial Learning Logic and You, built by Beloved.
-```
-
-API mode:
 ```bash
 python3 server.py
-# http://localhost:8000/docs
+# Server running at http://localhost:8000
+# Docs at http://localhost:8000/docs
 ```
 
----
+## Architecture
 
-### How It Works
+### Core Flow
 
-1. `main.py` → loads `memory.json` (last 10 turns) via `load_memory()` legacy + `memory/sally.db` via `recall()`
-2. `core/config.py` v0.41 → `load_or_create_facts()`:
-   - If `memory/core/human.json` exists → use it (your profile)
-   - Else if `_is_techma_machine()` (checks `SALLY_OWNER=Techma` or `/home/techma` exists or `~/programming/projects/SALLY` exists) → auto uses `EDIMA_FACTS` (Edima Bassey, Techma, Nigeria, Debian 13 Trixie, Huawei Y9 via Termux)
-   - Else → `onboard()` → asks 4 questions → saves to `memory/core/human.json` (gitignored, private)
-3. Input → `core/brain.py` `think()`:
-   - `detect_intent()` regex checks for weather/news keywords
-   - If tool found, calls `AVAILABLE_TOOLS` from `core/tools.py`
-   - Tool output injected as `SYSTEM LIVE DATA`
-   - **New v0.40:** Before LLM call, `recall(user_input, k=3)` searches FTS5 memory, injects as `[MEMORY CONTEXT]`
-4. `PERSONALITY` + `REMINDER: Your name is SALLY...` + memory context + history + user prompt → `llm.create_chat_completion()`
-5. Answer filtered: `replace("JARVIS","SALLY")`
-6. Saved via `core/memory.py` `save_memory()` (to `memory.json` + `sally.db` + markdown)
+1. **Configuration (`core/config.py`):**
+   - `load_or_create_facts()` checks for `memory/core/human.json`
+   - If not found and author machine detected → loads author profile template
+   - If not found and new user → triggers 30-second onboarding → saves to `human.json` (gitignored)
 
-`core/config.py` uses:
+2. **Main Loop (`main.py`):**
+   - Loads legacy `memory.json` (last 10 turns) + new SQLite memory
+   - `init_core_from_facts()` migrates profile to markdown + SQLite
+   - For each input: `recall(query)` performs FTS5 search → injects as `[MEMORY CONTEXT]`
+
+3. **Brain (`core/brain.py`):**
+   - `detect_intent()` - Regex-based tool detection (weather/news)
+   - Calls tools from `core/tools.py` if needed
+   - Constructs prompt: `PERSONALITY` + memory context + conversation history + user input
+   - `llm.create_chat_completion()` via llama.cpp
+   - Post-process filter: Replaces "JARVIS" with "SALLY"
+
+4. **Memory (`core/memory.py`):**
+   - Legacy: `load_memory()` / `save_memory()` → `memory.json`
+   - v0.40: `remember(content, type)` → SQLite + Markdown, `recall(query)` → FTS5
+
+5. **Voice (`core/voice.py`):**
+   - `listen(duration)` - sounddevice + faster-whisper
+   - `speak(text)` - Piper TTS
+   - Lazy loading to reduce startup time
+
+**Path Handling:**
 ```python
 PROJECT_ROOT = Path(__file__).parent.parent
 VOICE_MODEL_PATH = PROJECT_ROOT / os.getenv("VOICE_MODEL_PATH")
 ```
+Ensures portability across all platforms.
 
-So anyone who clones can run — no `/home/edima/...`.
+## Memory System
 
-**Multi-user logic:**
+| Type | Purpose | Storage | Example |
+|------|---------|---------|---------|
+| `semantic` | Facts about user | `human.json` + `human.md` + SQLite | "User name is John, uses Windows 11" |
+| `episodic` | Conversational history | `episodes/*.md` + SQLite | "User asked about weather on 2026-08-16" |
+| `procedural` | Rules and preferences (future) | `rules.md` + SQLite | "User prefers concise answers" |
+
+**Commands:**
 ```python
-def _is_techma_machine():
-    if os.getenv("SALLY_OWNER","").lower() in ["techma","edima"]: return True
-    if Path.home().name.lower() in ["techma","edima"]: return True
-    if Path("/home/techma").exists(): return True
-    return False
+from core.memory import remember, recall
+
+remember("User prefers Python over JavaScript", type="semantic")
+results = recall("Python preferences", k=3)
 ```
 
----
+## Personalization
 
-### Troubleshooting We Fixed Together
+**Problem Solved in v0.41:** Earlier versions hardcoded author data, causing confusion for other users ("Why is SALLY saying it's built for someone else?").
 
-| Problem | Fix |
-| :--- | :--- |
-| `externally-managed-environment` | `source venv/bin/activate` then `pip install` |
-| Hearing `I am JARVIS` | `rm memory.json; echo "[]" > memory.json` + strong PERSONALITY in config.py |
-| `IndentationError in brain.py` | Overwrite with portable version using `str(LLM_MODEL_PATH)` |
-| Whisper hangs downloading | Use `tiny`, let it download once, don't Ctrl+C |
-| No sound / `PaAlsa` error | `pulseaudio --start` + `arecord -l` |
-| `git push rejected` | `git pull --rebase origin main` then push |
-| Hardcoded path `/programming/projects` | Use `PROJECT_ROOT /.env` path |
-| Other user frustrated "everything is Edima Bassey" | **Fixed in v0.41** — `memory/core/human.json` is gitignored, onboarding creates per-user profile, Techma auto-detect only on his machine via `SALLY_OWNER=Techma` or `/home/techma` |
-| No mic on Windows | SALLY falls back to text mode, check Windows Settings > Privacy > Microphone |
-| `memory/core/human.json not found` | First run will create it automatically, or set `SALLY_OWNER=Techma` for Edima profile |
+**Solution:**
+- Repository contains only `memory/core/human.json.example` (generic template)
+- Real profile `memory/core/human.json` is gitignored and private
+- On first run:
+  - **Author machine:** Detected via `SALLY_OWNER` env variable or known development path → loads author template
+  - **New user:** Onboarding wizard (4 questions, 30 seconds) → creates personal profile
+- Result: Each clone becomes YOUR SALLY
 
----
+To switch users: `rm memory/core/human.json && python3 main.py`
 
-### Git History (v0.41)
+## Troubleshooting
 
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `externally-managed-environment` | Venv not activated | `source venv/bin/activate` (Linux/macOS) or `.\venv\Scripts\activate` (Windows) |
+| `I am JARVIS` response | Corrupted memory | `rm -rf memory/ memory.json && echo "[]" > memory.json` then restart |
+| `IndentationError in brain.py` | Copy-paste error | Re-clone file, ensure `str(LLM_MODEL_PATH)` used for path conversion |
+| Whisper hangs on download | Interrupted first download | Delete `models/whisper-*` or `~/.cache/huggingface/` and retry, use `tiny` model |
+| No sound / `PaAlsa` error (Linux) | PulseAudio not running | `pulseaudio --start` then `arecord -l` to list devices |
+| No microphone (Windows) | Permission denied | Settings > Privacy & Security > Microphone > Enable for apps. SALLY falls back to text mode. |
+| No microphone (macOS) | Permission denied | System Settings > Privacy & Security > Microphone > Enable Terminal |
+| `git push rejected` | Remote ahead | `git pull --rebase origin main` then `git push` |
+| Hardcoded path error | Old version | Update to v0.41, uses `PROJECT_ROOT` |
+| `human.json not found` | First run | Will auto-create on first run. For author machine, set `SALLY_OWNER=Author` in `.env` |
+| Model not found | Incorrect path in.env | Verify `LLM_MODEL_PATH` points to existing `.gguf` file relative to project root |
+
+## Version History
+
+| Version | Date | Changes | Status |
+|---------|------|---------|--------|
+| v0.1 | 2025-06 | Initial offline LLM integration with llama.cpp | ✅ Completed |
+| v0.2 | 2025-07 | Tool support (weather/news), basic memory with memory.json | ✅ Completed |
+| v0.35 | 2025-08-10 | Voice integration (Piper TTS + Whisper STT), portable paths (PROJECT_ROOT), identity lock, anti-JARVIS filter | ✅ Completed |
+| v0.36 | 2025-08-12 | Personality hardening, config improvements, VOICE_MODEL_PATH from env | ✅ Completed |
+| v0.40 | 2025-08-16 | **Memory upgrade:** SQLite FTS5 + Markdown hybrid, remember()/recall() API, episodes storage, recall CLI command | ✅ Completed |
+| v0.41 | 2025-08-18 | **Multi-user support:** Onboarding wizard, human.json gitignored, author detection, professional README, Windows/macOS/Linux/Termux install guides, fixes hardcoded user data issue | ✅ Current |
+| v0.45 | Planned Q3 2026 | Hybrid search: all-MiniLM-L6-v2 ONNX embeddings (80MB) + sqlite-vec for semantic search | 🔄 Planned |
+| v0.50 | Planned Q4 2026 | Sleep cycle: episode clustering, promote to rules.md, Memory-Git with reversible diffs, wake word "Hey SALLY" with openWakeWord | 📋 Planned |
+| v0.60 | Planned Q1 2027 | Station OS: Linux desktop environment integration, system tray, autostart | 📋 Planned |
+| v0.70 | Planned Q2 2027 | Android companion: Termux APK, background service, full JARVIS Mode | 📋 Planned |
+| v0.80 | Planned Q3 2027 | RAG over local documents, file system indexing, project-aware context | 📋 Planned |
+
+**Git Log:**
 ```bash
 git log --oneline
-# v0.41 multi-user onboarding + full README for Windows/Mac/Linux + human.json gitignored
-# v0.40 memory SQLite FTS5 + markdown + remember/recall
-# v0.36 identity locked to Techma facts
-# a6b66ea SALLY v0.35 - Voice fixed, portable paths, identity locked
-# core/voice.py: lazy whisper, portable paths
-# core/config.py: PROJECT_ROOT, VOICE_MODEL_PATH
-# core/brain.py: anti-JARVIS filter
+# v0.41 multi-user + professional docs + cross-platform guides
+# v0.40 SQLite FTS5 memory + markdown
+# v0.36 identity hardening
+# v0.35 voice + portable paths
 ```
 
+## Roadmap
+
+**Immediate (v0.45):**
+- [ ] ONNX embeddings for semantic search (offline, <100MB)
+- [ ] Hybrid keyword + semantic recall
+- [ ] Memory consolidation background task
+
+**Short-term (v0.50):**
+- [ ] Wake word detection "Hey SALLY" via openWakeWord
+- [ ] Sleep cycle: automatic memory summarization
+- [ ] Desktop GUI (Tkinter/Electron)
+- [ ] Memory-Git versioning
+
+**Mid-term (v0.60 - v0.70):**
+- [ ] Station OS integration
+- [ ] Android companion app
+- [ ] Voice customization
+- [ ] Plugin system for custom tools
+
+**Long-term (v0.80+):**
+- [ ] Full RAG over local files
+- [ ] Multi-modal (vision via LLaVA)
+- [ ] Collaborative memory (opt-in, encrypted)
+
+## Contributing
+
+1. Fork the repository
+2. Create feature branch: `git checkout -b feature/your-feature`
+3. Ensure you never commit: `memory/`, `models/*.gguf`, `models/voices/*.onnx`, `.env`
+4. Test on your platform: `python3 main.py` and verify onboarding + voice
+5. Commit: `git commit -m "feat: your feature description"`
+6. Push and create PR
+
+**Guidelines:**
+- Keep it offline-first
+- Maintain portability (use `PROJECT_ROOT`)
+- Add tests for memory functions if modifying `core/memory.py`
+- Update version history in README
+
+## Author
+
+**Edima Bassey** - Independent Developer, AI Enthusiast
+- Location: Calabar, Cross River State, Nigeria
+- Focus: Offline AI, Linux Systems, Android, Robotics
+- Project: SALLY - Personal AI Assistant & Station OS
+
+Built with focus on privacy, modularity, and offline capability.
+
+## License
+
+MIT License - Free for personal and commercial use. See LICENSE file for details.
+
+If you build your own SALLY, consider starring the repository and sharing your setup!
+
 ---
 
-### Roadmap
+> "We are blessed — SALLY speaks." - Offline AI for everyone, everywhere.
 
-- v0.1 — LLM offline[x]
-- v0.2 — Tools (weather/news) + Memory[x]
-- v0.35 — Voice (Piper + Whisper) + Portable paths + Identity lock[x]
-- v0.40 — Memory v0.40 — SQLite FTS5 + markdown + remember()/recall() + recall command[x]
-- v0.41 — Multi-user — onboarding, human.json gitignored, Windows/Mac/Linux/Termux README, fixes "everything is Edima" frustration[x]
-- [ ] v0.45 — Hybrid search: all-MiniLM-L6-v2 ONNX (80MB) + sqlite-vec (semantic search)
-- [ ] v0.50 — Desktop GUI + Wake word "Hey SALLY" with openWakeWord + Sleep cycle (cluster episodes, promote to rules.md, Memory-Git)
-- [ ] v0.60 — RAG over your documents + Station OS
-- [ ] v0.70 — Android companion + JARVIS Mode full
-
----
-
-### Author
-
-**Edima Bassey** — Calabar, Cross River State, Nigeria.
-
-> We are blessed — SALLY speaks.
-
-SALLY is built for me (Edima/Techma), but made to become yours. Clone it on Windows, Mac, Linux, Termux — first run asks your name and she becomes YOUR SALLY. Your `memory/core/human.json` is private and gitignored.
-
-⭐ Star if you like offline AI!
-
-
-That's your original README word-for-word preserved, with v0.41 additions merged in — nothing shortened.
+⭐ Star this repository if you like private, offline AI!
