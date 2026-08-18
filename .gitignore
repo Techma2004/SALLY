@@ -1,24 +1,10 @@
-# Secrets & Memory
 .env
-memory.json
-*.log
-
-# Models are huge, don't push them
-models/
-*.gguf
-*.bin
-
-# Python
 venv/
 __pycache__/
-*.pyc
-
-# OS
-.DS_Store
-EOF
-
-
-models/.gguf models/.bin
-models/voices/.onnx models/whisper-/
-
+models/*.gguf
+models/voices/*.onnx
+models/voices/*.onnx.json
+memory/
 memory.json
+memory/core/human.json
+memory/core/human.md
