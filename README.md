@@ -4,13 +4,13 @@
   <img src="logo.png" width="400" alt="SALLY logo" />
 </p>
 
-[Python](https://img.shields.io/badge/Python-3.13-blue)
-[Debian](https://img.shields.io/badge/Debian-13_Trixie-red)
-[Offline](https://img.shields.io/badge/Offline-100%25-green)
-[Version](https://img.shields.io/badge/Version-v0.41%20Multi--User-purple)
-[Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Termux-lightgrey)
 
-> Offline-first, private, voice-enabled personal AI assistant. Built by **Beloved Bassey** on Debian. Runs 100% locally with `llama.cpp`, `Piper TTS`, and `faster-whisper`. No cloud.
+![Python](https://img.shields.io/badge/Python-3.13-blue)
+![Debian](https://img.shields.io/badge/Debian-13_Trixie-red)
+![Offline](https://img.shields.io/badge/Offline-100%25-green)
+![Version](https://img.shields.io/badge/Version-v0.35%20Voice-purple
+
+> Offline-first, private, voice-enabled personal AI assistant. Built by **Edima Bassey** on Debian. Runs 100% locally with `llama.cpp`, `Piper TTS`, and `faster-whisper`. No cloud.
 
 > **New in v0.41:** SALLY is no longer hardcoded to Edima. On first run she asks who YOU are and becomes YOUR SALLY. Your profile stays local and gitignored. On Techma's machine she auto-loads Edima Bassey (Techma) profile.
 
