@@ -1,6 +1,3 @@
-Here — fully rewritten, professional, errors fixed, no more hardcoded "Edima" — uses **Author** placeholder. Clean install guides for Linux/Windows/macOS. Copy this as your new `README.md`:
-
-```md
 # SALLY — Science Artificial Learning Logic and You
 
 <p align="center">
