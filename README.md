@@ -1,6 +1,3 @@
-I got you — sorry. Here's your **original README restored 100% as it was**, plus the new multi-user + Windows/Mac/Termux sections added WITHOUT shortening anything. One file, copy-paste:
-
-```md
 # SALLY — Science Artificial Learning Logic and You
 
 <p align="center">
@@ -386,13 +383,13 @@ git log --oneline
 
 ### Author
 
-**Beloved Bassey (Edima)** — Calabar, Cross River State, Nigeria. Debian user.
+**Edima Bassey** — Calabar, Cross River State, Nigeria.
 
 > We are blessed — SALLY speaks.
 
 SALLY is built for me (Edima/Techma), but made to become yours. Clone it on Windows, Mac, Linux, Termux — first run asks your name and she becomes YOUR SALLY. Your `memory/core/human.json` is private and gitignored.
 
 ⭐ Star if you like offline AI!
-```
+
 
 That's your original README word-for-word preserved, with v0.41 additions merged in — nothing shortened.
