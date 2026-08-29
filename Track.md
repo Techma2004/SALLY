@@ -1,35 +1,17 @@
-# SALLY Progress Tracker — Hermes Upgrade
+# SALLY Hermes Upgrade Tracker v0.44
 
-## Phase 0 — Fixes (DONE)
-- [x] mmproj crash fix,.env split, tool-forced brain
+Phase 0 Fixes DONE — mmproj crash, .env
+Phase 1 Memory DONE — SQLite FTS5 44KB 10ms
+Phase 2 Tools DONE — 7 tools OpenAI format, forced intent for 1.5B
+Phase 3 TUI DONE — prompt_toolkit + rich, /new /skills /memory /model /usage /help
+Phase 4 Learning Loop DONE — tool_usage table, auto skill after 5 uses, /learn
 
-## Phase 1 — Hermes 3-Layer Memory (DONE) v0.42
-- [x] SQLite + FTS5 ~10ms, memory.db 44KB, migration USER.md/MEMORY.md
+Current:
+- Model Qwen2.5-Coder-1.5B Q3_K_L
+- DB 44KB, get_time x1, calc x2
+- TUI v0.44 knows Edima
+- Auto skills: calc_auto.py after 5x
 
-## Phase 2 — Real Function Calling (DONE) v0.43
-- [x] tools.py 7 tools OpenAI format
-- [x] brain.py v4 forced intent detection for 1.5B model
-- [x] chat() loop: LLM -> tool -> LLM
-- Tested: time, weather, calc working with Qwen2.5-Coder-1.5B
-
-## Phase 3 — Real TUI (DONE) v0.43
-- [x] core/tui.py prompt_toolkit + rich
-- [x] Commands: /new /skills /memory /model /usage /help /exit
-- [x] FileHistory, autocomplete, AutoSuggest
-- [x] main.py launches run_tui()
-- Tested: /usage DB 44KB, /skills lists 7, weather 23.5C 96% rain, time, calc
-
-## Phase 4 — Learning Loop (NEXT)
-- [ ] core/learner.py auto-create skill after 5+ tool calls
-- [ ] nudges every 15 turns
-
-## Phase 5 — Gateway
-- [ ] Telegram/Discord
-
-## Phase 6 — Cron
-- [ ] APScheduler
-
-## Current:
-- Model: Qwen2.5-Coder-1.5B Q3_K_L 1.3GB
-- DB: 44KB, <1GB/year target
-- Tools forced working
+Next:
+Phase 5 Gateway — Telegram bot + Discord
+Phase 6 Cron — APScheduler daily brief
