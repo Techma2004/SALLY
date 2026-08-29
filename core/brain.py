@@ -1,64 +1,56 @@
-from llama_cpp import Llama
-from.config import PERSONALITY, LLM_MODEL_PATH, LLM_N_CTX, LLM_N_THREADS, LLM_TEMPERATURE
-from.tools import AVAILABLE_TOOLS
-import re
+import time
 
-print(f"[SALLY] Loading {LLM_MODEL_PATH}...")
-llm = Llama(
-    model_path=str(LLM_MODEL_PATH),
-    n_ctx=LLM_N_CTX,
-    n_threads=LLM_N_THREADS,
-    verbose=False
-)
-print("[SALLY] Ready.")
+_llm = None
 
-def detect_intent(prompt: str):
-    prompt_lower = prompt.lower()
-    if any(k in prompt_lower for k in ["weather", "temperature", "forecast"]):
-        city_match = re.search(r"in ([a-zA-Z ]+)", prompt_lower)
-        city = city_match.group(1).strip() if city_match else None
-        return "get_weather", {"city": city}
-    if any(k in prompt_lower for k in ["news", "headlines"]):
-        topic_match = re.search(r"news (?:about|on|for)? ([a-zA-Z ]+)", prompt_lower)
-        topic = topic_match.group(1).strip() if topic_match else "technology"
-        return "get_news", {"topic": topic, "count": 5}
-    return None, {}
+def get_llm():
+    global _llm
+    if _llm is not None:
+        return _llm
+    from llama_cpp import Llama
+    from core.config import LLM_MODEL_PATH, LLM_N_CTX, LLM_N_THREADS
 
-def think(prompt, history=[]):
-    tool_name, tool_args = detect_intent(prompt)
-    tool_context = ""
-
-    if tool_name and tool_name in AVAILABLE_TOOLS:
-        print(f"[SALLY] Tool -> {tool_name} {tool_args}")
-        func = AVAILABLE_TOOLS[tool_name]
-        clean_args = {k: v for k, v in tool_args.items() if v}
-        try:
-            result = func(**clean_args)
-            tool_context = f"\nSYSTEM LIVE DATA FROM TOOL {tool_name}: {result}\nYou MUST use this data. Never say you can't access internet."
-        except Exception as e:
-            tool_context = f"\n[TOOL ERROR]: {e}"
-
-    full_prompt = prompt + tool_context
-
-    # Strong identity lock - 2 system messages
-    messages = [
-        {"role": "system", "content": PERSONALITY},
-        {"role": "system", "content": "REMINDER: Your name is SALLY. You are NOT JARVIS. You are SALLY built by Edima  Bassey."}
-    ]
-    messages.extend(history)
-    messages.append({"role": "user", "content": full_prompt})
-
-    output = llm.create_chat_completion(
-        messages=messages,
-        max_tokens=512,
-        temperature=LLM_TEMPERATURE,
-        stop=["<|eot_id|>", "<|im_end|>"]
+    print(f"[SALLY] Loading {LLM_MODEL_PATH.name}...")
+    t0 = time.time()
+    _llm = Llama(
+        model_path=str(LLM_MODEL_PATH),
+        n_ctx=LLM_N_CTX,
+        n_threads=LLM_N_THREADS,
+        use_mmap=True,
+        use_mlock=False,
+        verbose=False
     )
+    print(f"[SALLY] Ready in {time.time()-t0:.1f}s")
+    return _llm
 
-    answer = output["choices"][0]["message"]["content"]
-    # Final safety filter
-    answer = answer.replace("JARVIS", "SALLY")
-    answer = answer.replace("I am an AI language model", "I am SALLY")
-    answer = answer.replace("I am a language model", "I am SALLY")
+def think(prompt, history, tools):
+    from core.config import PERSONALITY, LLM_TEMPERATURE
+    from core.memory import get_context
 
-    return answer
+    mem = get_context()
+    low = prompt.lower()
+
+    # --- Hermes: check tools first ---
+    tool_outputs = []
+    if "weather" in low or "temperature" in low:
+        if "weather" in tools:
+            tool_outputs.append(tools["weather"](prompt))
+    if "news" in low or "headline" in low:
+        if "news" in tools:
+            tool_outputs.append(tools["news"](prompt))
+
+    # If it's a weather/news query, return tool result DIRECTLY — no LLM hallucination
+    if tool_outputs:
+        # If tool says no API key, show it clearly
+        return "\n".join(tool_outputs)
+
+    llm = get_llm()
+    msgs = [
+        {"role": "system", "content": f"{PERSONALITY}\n[MEMORY]\n{mem}"},
+        *history[-4:],
+        {"role": "user", "content": prompt}
+    ]
+    out = llm.create_chat_completion(messages=msgs, temperature=LLM_TEMPERATURE, max_tokens=350)
+    ans = out["choices"][0]["message"]["content"].strip()
+    if ans.lower().startswith("sally:"):
+        ans = ans[6:].strip()
+    return ans
