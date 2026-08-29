@@ -40,6 +40,8 @@ except ImportError as e:
     print(f"Missing dep: {e}")
 
 from.gateway import gateway_chat
+from pathlib import Path
+CHAT_IDS_FILE = Path(__file__).parent.parent.parent / "memory" / "telegram_chat_ids.json"
 
 ALLOWED_IDS = os.getenv("TELEGRAM_ALLOWED_IDS","")
 ALLOWED_SET = set([int(x.strip()) for x in ALLOWED_IDS.split(",") if x.strip().isdigit()]) if ALLOWED_IDS else set()
