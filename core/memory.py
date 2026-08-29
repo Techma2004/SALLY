@@ -198,3 +198,19 @@ def compact_daily():
 
 # init on import
 init_db()
+
+
+# --- Backward compat ---
+import hashlib
+def learn(text: str):
+    return save_memory(text, mtype="fact", importance=0.6)
+def recall(query: str, k: int=5):
+    results=search_memory(query, limit=k)
+    out=[]
+    for r in results:
+        out.append({"id": hashlib.md5(r["content"].encode()).hexdigest()[:8], "content": r["content"], "type": r["type"]})
+    return out
+def get_context():
+    u=load_user()
+    m=load_memory()
+    return f"User: {u[:200]} | Memory: {m[:300]}"
