@@ -1,0 +1,4 @@
+- User:hello|SALLY:Hello! I'm Sally. How can I assist you today?
+- User:what is the weather in calabar|get_weather->[TOOL] Weather key missing. Time: 2026-08-29 14:12:31  City: calabar
+- User:hi|SALLY:Hi there! How can I assist you today?
+- User:hello|SALLY:Hello! How can I assist you today?

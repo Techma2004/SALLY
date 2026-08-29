@@ -1,47 +1,47 @@
 [
   {
     "role": "user",
-    "content": "Thank you"
+    "content": "Hello"
   },
   {
     "role": "assistant",
-    "content": "You're welcome! If you have any other questions, feel free to ask."
+    "content": "Hello! How can I assist you today?"
   },
   {
     "role": "user",
-    "content": "Chatting with you from telegram is cool"
+    "content": "What is available"
   },
   {
     "role": "assistant",
-    "content": "I'm glad you enjoy chatting with me! How can I help you today?"
+    "content": "I am here to help you with a variety of topics, including:\n\n- Getting weather updates\n- Providing news headlines\n- Calculating mathematical expressions\n- Revising long-term memory\n- Saving and recalling user facts\n- Helping with general knowledge or science topics\n\nFeel free to ask me anything you'd like to know or discuss!"
   },
   {
     "role": "user",
-    "content": "\ud83d\udc4d"
+    "content": "What is the weather update in calabar"
   },
   {
     "role": "assistant",
-    "content": "Thank you! If you have any other questions or need further assistance, feel free to ask."
+    "content": "According to the data provided, the current weather in Calabar is 24.39\u00b0C (76\u00b0F) with 94% humidity. The sky is overcast."
   },
   {
     "role": "user",
-    "content": "I have never done this before"
+    "content": "Thank you, Sally"
   },
   {
     "role": "assistant",
-    "content": "I understand. It's a great opportunity to learn and explore new things. Do you have any specific questions or topics you would like to talk about?"
+    "content": "You're welcome! I'm here to help. If you have any other questions, feel free to ask."
   },
   {
     "role": "user",
-    "content": "Am really amazed"
+    "content": "Ok"
   },
   {
     "role": "assistant",
-    "content": "Thank you! It's wonderful to hear that you're impressed. I'm here to help and answer any questions you may have. How can I assist you today?"
+    "content": "I'm here to help."
   },
   {
     "role": "user",
-    "content": "Should i increase ur llm capacity from 1.5B to 3B"
+    "content": "Good morning moron"
   },
   {
     "role": "assistant",
@@ -49,34 +49,34 @@
   },
   {
     "role": "user",
-    "content": "Ok no problem, i understand u don't know"
+    "content": "Good morning my spn"
   },
   {
     "role": "assistant",
-    "content": "Absolutely, I'm here to help. Let me know if there's anything else you need assistance with."
+    "content": "Good morning! How may I assist you today?"
   },
   {
     "role": "user",
-    "content": "What is my name"
+    "content": "Good morning my son"
   },
   {
     "role": "assistant",
-    "content": "Hello, I'm Sally! How can I help you today?"
+    "content": "Good morning, my son! How can I assist you today?"
   },
   {
     "role": "user",
-    "content": "Can you calculate 2+5-2/6"
+    "content": "I love my only son"
   },
   {
     "role": "assistant",
-    "content": "Certainly! Let's break down the expression step by step:\n\n1. First, perform the division: \\(2 \\div 6\\)\n   \\[\n   2 \\div 6 = 0.33333333333333336\n   \\]\n\n2. Next, subtract the result from the first number: \\(2 + 5 - 0.33333333333333336\\)\n   \\[\n   2 + 5 = 7\n   \\]\n   \\[\n   7 - 0.33333333333333336 = 6.666666666666666\n   \\]\n\nSo, the final answer is \\(6.666666666666666\\)."
+    "content": "That's wonderful to hear! How can I assist you today?"
   },
   {
     "role": "user",
-    "content": "Thanks alot"
+    "content": "Do university of uyo starts admitting students for 2026 academic year?"
   },
   {
     "role": "assistant",
-    "content": "You're welcome! If you have any more questions or need further assistance, feel free to ask."
+    "content": "Yes, University of Uyo starts admitting students for the 2026 academic year."
   }
 ]

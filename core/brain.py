@@ -1,110 +1,63 @@
-import os, json, re
+import re, json, os, ast, operator
 from pathlib import Path
-try:
-    from llama_cpp import Llama
-except ImportError:
-    Llama=None
-from.config import load_config, load_facts
-from.memory import search_memory, load_user, load_memory
-from.tools import TOOLS, execute_tool, get_tool_descriptions_for_prompt
-try:
-    from.learner import log_tool_use
-    HAS_LEARNER=True
-except:
-    HAS_LEARNER=False
-    def log_tool_use(*a,**k): pass
-
-PERSONALITY="""You are SALLY - Science Artificial Learning Logic and You. Offline, private, helpful. Built by Edima Bassey in Calabar. You NEVER say you are JARVIS. You are SALLY."""
-
-def build_system_prompt():
-    return f"{PERSONALITY}\n\nUSER: {load_user()[:800]}\nMEMORY: {load_memory()[:800]}\n\n{get_tool_descriptions_for_prompt()}"
-
+try: from llama_cpp import Llama
+except: Llama=None
+from core.config import PROJECT_ROOT, load_user
+from core.memory import search_memory, save_memory
+from core.tools import get_weather, get_time, get_news
 _llm=None
 def get_llm():
     global _llm
     if _llm is not None: return _llm
     if Llama is None: return None
-    cfg=load_config()
-    mp=cfg.get("model_path")
-    if not mp or not Path(mp).exists(): return None
-    if "mmproj" in str(mp).lower(): return None
-    print(f"[BRAIN] Loaded {mp}")
-    _llm=Llama(model_path=str(mp), n_ctx=cfg.get("n_ctx",4096), n_threads=cfg.get("n_threads",8), verbose=False)
+    mp=os.getenv("LLM_MODEL_PATH","models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf")
+    full=PROJECT_ROOT/mp
+    if not full.exists():
+        for p in (PROJECT_ROOT/"models").glob("*.gguf"): full=p; break
+    try: _llm=Llama(model_path=str(full),n_ctx=4096,n_threads=8,verbose=False)
+    except Exception as e: print(f"[BRAIN] {e}"); _llm=None
     return _llm
-
-def parse_tool_call(text):
-    m=re.search(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL)
-    if m: text=m.group(1)
-    jm=re.search(r"\{.*\}", text, re.DOTALL)
-    if jm:
+def detect_tool(text):
+    t=text.lower()
+    if any(w in t for w in ["weather","forecast","temperature"]):
+        m=re.search(r"in ([A-Za-z\s]+)",text,re.I); city=m.group(1).strip() if m else "Calabar"
+        return "get_weather",{"city":city}
+    if any(w in t for w in ["time","clock","date"]): return "get_time",{}
+    if "calc" in t or re.search(r"\d+\s*[\+\-\*/]",t):
+        m=re.search(r"([0-9+\-*/().%\s]+)",text); return "calc",{"expression":m.group(1) if m else text}
+    return None
+def execute_tool(name,args):
+    if name=="get_weather": return get_weather(args.get("city","Calabar"))
+    if name=="get_time": return get_time()
+    if name=="calc":
         try:
-            data=json.loads(jm.group(0))
-            if "tool" in data: return data["tool"], data.get("args") or {}
-            if "name" in data: return data["name"], data.get("args") or {}
-        except: pass
-    return None,None
-
-def detect_intent(text):
-    low=text.lower()
-    if "weather" in low:
-        m=re.search(r"weather in ([a-z ]+)", low)
-        city=m.group(1).strip() if m else "Calabar"
-        city=city.replace(" now","").replace(" today","").split()[0]
-        return "get_weather", {"city": city}
-    if ("time" in low or "date" in low) and "what" in low:
-        return "get_time", {}
-    if "news" in low:
-        m=re.search(r"news (?:about|on|for|in) ([a-z ]+)", low)
-        topic=m.group(1).strip() if m else "technology"
-        return "get_news", {"topic": topic}
-    if "calc" in low or re.search(r"[0-9]+\s*[+\-*/]\s*[0-9]+", text):
-        expr=re.sub(r"(?i)calculate|calc|what is|what's|equals|=", "", text)
-        expr=re.sub(r"[^0-9+\-*/().% ]", "", expr).strip()
-        if expr and len(expr)>=3:
-            return "calc", {"expression": expr}
-    if low.startswith("recall ") or low.startswith("/memory"):
-        q=text.split(" ",1)[1] if " " in text else ""
-        return "recall_memory", {"query": q}
-    return None,None
-
-def filter_identity(t):
-    return t.replace("JARVIS","SALLY").replace("Meta AI","SALLY")
-
-def chat(user_input, history=None):
-    iname,iargs=detect_intent(user_input)
-    llm=get_llm()
-    if iname:
-        print(f"[BRAIN] Forced tool: {iname} {iargs}")
-        out=execute_tool(iname, iargs)
-        try: log_tool_use(iname, iargs, out)
-        except: pass
-        if llm is None: return out
-        msgs=[{"role":"system","content":f"Tool {iname} returned: {out}. Answer naturally."},{"role":"user","content":user_input}]
-        try:
-            r=llm.create_chat_completion(messages=msgs, temperature=0.7, max_tokens=256)
-            return filter_identity(r["choices"][0]["message"]["content"])
-        except: return out
-    if llm is None: return f"[offline] {user_input}"
-    sys_prompt=build_system_prompt()
-    msgs=[{"role":"system","content":sys_prompt}]
-    for h in (history or [])[-6:]: msgs.append(h)
-    msgs.append({"role":"user","content":user_input})
+            allowed={ast.Add:operator.add,ast.Sub:operator.sub,ast.Mult:operator.mul,ast.Div:operator.truediv,ast.Pow:operator.pow,ast.Mod:operator.mod}
+            def ev(n):
+                if isinstance(n,ast.Constant): return n.value
+                if isinstance(n,ast.BinOp): return allowed[type(n.op)](ev(n.left),ev(n.right))
+                if isinstance(n,ast.UnaryOp): return -ev(n.operand)
+                raise ValueError("unsafe")
+            return str(ev(ast.parse(args.get("expression",""),mode='eval').body))
+        except Exception as e: return f"calc error {e}"
+    if name=="get_news": return get_news(args.get("topic","AI"))
+    return f"Unknown {name}"
+def chat(user_id,message):
+    mem=""
     try:
-        resp=llm.create_chat_completion(messages=msgs, temperature=0.7, max_tokens=512)
-        txt=resp["choices"][0]["message"]["content"].strip()
-    except Exception as e: return f"[ERROR] {e}"
-    name,args=parse_tool_call(txt)
-    if name:
-        out=execute_tool(name, args or {})
-        try: log_tool_use(name, args or {}, out)
-        except: pass
-        msgs.append({"role":"assistant","content":txt})
-        msgs.append({"role":"user","content":f"Tool returned: {out}. Answer."})
-        try:
-            r2=llm.create_chat_completion(messages=msgs, temperature=0.7, max_tokens=256)
-            return filter_identity(r2["choices"][0]["message"]["content"])
-        except: return out
-    return filter_identity(txt)
-
-def respond(p,h=None): return chat(p,h)
-def think(p,h=None,t=None): return chat(p,h)
+        h=search_memory(message,3)
+        if h: mem="[MEMORY]\n"+"\n".join(h)+"\n"
+    except: pass
+    forced=detect_tool(message)
+    if forced:
+        n,a=forced; r=execute_tool(n,a); save_memory(f"User:{message}|{n}->{r}","episodic"); return r
+    llm=get_llm()
+    if llm is None: return f"SALLY offline tools only: try 'weather in Calabar' or 'time' or 'calc 25*40'"
+    user=load_user(); sys=f"You are SALLY for {user.get('user_name','Edima')} in Calabar. Tools: get_weather(city), get_time(), calc(expr)."
+    prompt=f"<|im_start|>system\n{sys}\n{mem}<|im_end|>\n<|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n"
+    try:
+        out=llm.create_completion(prompt,max_tokens=512,temperature=0.7,stop=["<|im_end|>"])
+        text=out["choices"][0]["text"].strip()
+        text=re.sub(r"JARVIS","SALLY",text,flags=re.I)
+        save_memory(f"User:{message}|SALLY:{text[:500]}","episodic")
+        return text
+    except Exception as e: return f"Error {e}"

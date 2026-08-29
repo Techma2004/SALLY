@@ -1,23 +1,21 @@
-# SALLY Hermes Upgrade Tracker v0.45
+# SALLY Hermes Upgrade Tracker v0.46 - COMPLETE
 
-Phase 0 Fixes DONE — mmproj crash fix,.env split
-Phase 1 Memory DONE — SQLite FTS5 44KB 10ms search
-Phase 2 Tools DONE — 7 tools, forced intent for 1.5B model
-Phase 3 TUI DONE — prompt_toolkit + rich, /new /skills /memory /model /usage /help
-Phase 4 Learning Loop DONE — tool_usage table, auto skill after 5 uses, /learn
-Phase 5 Gateway DONE — Telegram @Sally_12345_bot working
-    - core/gateway/gateway.py shared router (TUI/Telegram/Discord)
-    - core/gateway/telegram.py v21.6 polling, Python 3.13 compatible
-    - Shares memory.db + history_telegram.json + learner
-    - Commands: /start /skills /memory /learn /new
-    - Tested: same Edima memory in Telegram as TUI
+Phase 0 Fixes DONE
+Phase 1 Memory DONE — SQLite FTS5 44KB 10ms
+Phase 2 Tools DONE — 7 tools + forced intent for 1.5B
+Phase 3 TUI DONE — prompt_toolkit + rich
+Phase 4 Learning Loop DONE — tool_usage + auto skills + /learn
+Phase 5 Gateway DONE — Telegram @Sally_12345_bot v21.6, Python 3.13 fix
+Phase 6 Cron DONE — APScheduler daily 7am WAT brief
+    - core/cron.py self-contained (no handle_tool_call dep)
+    - Weather Calabar + News NG + Memory recap + Learner stats
+    - Saves memory/daily/YYYY-MM-DD.md + saves to memory.db
+    - Pushes to Telegram via telegram_chat_ids.json
+    - Run: python3 -m core.cron --now (test) / python3 -m core.cron (daemon)
 
-Current:
-- Model: Qwen2.5-Coder-1.5B Q3_K_L 1.3GB
-- DB: memory.db 44KB + tool_usage + auto skills
-- Frontends: TUI (main.py) + Telegram (@Sally_12345_bot)
-- Gateway token loader handles PUT_YOUR_TOKEN malformed case
+Hermes v0.46 COMPLETE:
+- TUI: python3 main.py
+- Telegram: python3 -m core.gateway.telegram
+- Cron: python3 -m core.cron (separate terminal / tmux)
 
-Next (tomorrow):
-Phase 6 Cron — APScheduler daily brief 7am weather + memory + news
-Phase 5b Optional — WhatsApp Cloud API gateway (Flask + ngrok)
+Stack: Qwen2.5-Coder-1.5B Q3_K_L, SQLite, PTK TUI, python-telegram-bot 21.6, APScheduler
