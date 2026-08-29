@@ -10,3 +10,4 @@ venv/
 __pycache__/
 *.db
 *.pyc
+.env

@@ -9,3 +9,6 @@ faster-whisper
 piper-tts 
 sounddevice 
 soundfile
+prompt_toolkit
+rich
+pthon-telegram-bot==21.6
