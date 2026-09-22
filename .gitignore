@@ -13,3 +13,8 @@ __pycache__/
 .env
 memory/telegram_chat_ids.json
 memory/daily/
+
+.venv/
+sally.egg-info/
+.sallyforge/
+

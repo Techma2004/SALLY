@@ -1,4 +1,4 @@
-import json
+import json, os
 from pathlib import Path
 try:
     from prompt_toolkit import PromptSession
@@ -13,9 +13,9 @@ try:
     HAS_RICH=True
     console=Console()
 except: HAS_RICH=False
-from.brain import chat, get_llm
-from.memory import search_memory, load_user, init_db
-from.config import load_config
+from .brain import chat, get_llm
+from .memory import search_memory, load_user, init_db
+from .config import PROJECT_ROOT
 PROJECT_ROOT=Path(__file__).parent.parent
 HIST_FILE=PROJECT_ROOT/"memory"/"history.json"
 PT_HISTORY=PROJECT_ROOT/"memory"/".prompt_history"
@@ -31,19 +31,18 @@ def handle_command(cmd, history):
         q=cmd.split(" ",1)[1] if " " in cmd else ""
         res=search_memory(q,5)
         if not res: return f"No memory for '{q}'", False
-        return "\n".join([f"- {r['content'][:180]}" for r in res]), False
+        return "\n".join([f"- {r[:180]}" for r in res]), False
     if low=="/skills":
-        from.tools import TOOLS
-        out="\n".join([f"{t['function']['name']}: {t['function']['description'][:70]}" for t in TOOLS])
+        from .tools import TOOLS, get_tool_descriptions_for_prompt
+        out="Available tools:\n" + get_tool_descriptions_for_prompt()
         try:
-            from.learner import list_auto_skills
+            from .learner import list_auto_skills
             autos=list_auto_skills()
             if autos: out+="\n\nAuto skills:\n" + "\n".join([f" - {p.name}" for p in autos])
         except: pass
         return out, False
     if low=="/model":
-        cfg=load_config()
-        mp=cfg.get("model_path")
+        mp=os.getenv("LLM_MODEL_PATH","models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf")
         return f"Model: {mp} Exists: {Path(mp).exists()}", False
     if low=="/usage":
         db=PROJECT_ROOT/"memory"/"memory.db"
@@ -51,7 +50,7 @@ def handle_command(cmd, history):
         return f"DB {sz:.1f}KB History {len(history)}", False
     if low=="/learn":
         try:
-            from.learner import get_tool_stats, list_auto_skills
+            from .learner import get_tool_stats, list_auto_skills
             stats=get_tool_stats()
             out="Tool usage:\n" + "\n".join([f"{t} x{c}" for t,c,_ in stats]) if stats else "No usage yet"
             autos=list_auto_skills()
@@ -84,10 +83,10 @@ def run_tui():
             if u.startswith("/memory") or u.lower().startswith("recall "): continue
             if res and u.startswith("/"): continue
         try:
-            from.memory import learn
+            from .memory import learn
             learn(u)
         except: pass
-        ans=chat(u,history)
+        ans=chat("user", u)
         print(f"\nSALLY: {ans}\n")
         history.append({"role":"user","content":u}); history.append({"role":"assistant","content":ans})
         HIST_FILE.write_text(json.dumps(history[-20:], indent=2))

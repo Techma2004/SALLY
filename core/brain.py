@@ -24,7 +24,7 @@ def detect_tool(text):
         return "get_weather",{"city":city}
     if any(w in t for w in ["time","clock","date"]): return "get_time",{}
     if "calc" in t or re.search(r"\d+\s*[\+\-\*/]",t):
-        m=re.search(r"([0-9+\-*/().%\s]+)",text); return "calc",{"expression":m.group(1) if m else text}
+        m=re.search(r"([0-9+\-*/().%\s]+)",text); return "calc",{"expression":m.group(1).strip() if m else text}
     return None
 def execute_tool(name,args):
     if name=="get_weather": return get_weather(args.get("city","Calabar"))

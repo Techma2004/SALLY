@@ -16,7 +16,20 @@ def get_news(topic="AI"):
         r=requests.get(f"https://newsapi.org/v2/everything?q={topic[:50]}&pageSize=3&apiKey={k}",timeout=8); r.raise_for_status()
         return "\n".join([f"- {a['title']}" for a in r.json().get("articles",[])[:3]])
     except Exception as e: return f"News error: {e}"
-def calc(expression): return expression
+def calc(expression):
+    import ast, operator
+    try:
+        allowed = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod}
+        def ev(n):
+            if isinstance(n, ast.Constant): return n.value
+            if isinstance(n, ast.BinOp): return allowed[type(n.op)](ev(n.left), ev(n.right))
+            if isinstance(n, ast.UnaryOp): return -ev(n.operand)
+            raise ValueError("unsafe")
+        expr = expression.strip()
+        # Remove any trailing garbage
+        expr = ''.join(c for c in expr if c in '0123456789+-*/().% ')
+        return str(ev(ast.parse(expr, mode='eval').body))
+    except Exception as e: return f"calc error: {e}"
 TOOLS={"get_weather":get_weather,"get_time":get_time,"get_news":get_news,"calc":calc}
 def execute_tool(name, args=None):
     args=args or {}

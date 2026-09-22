@@ -2,3 +2,15 @@
 - User:what is the weather in calabar|get_weather->[TOOL] Weather key missing. Time: 2026-08-29 14:12:31  City: calabar
 - User:hi|SALLY:Hi there! How can I assist you today?
 - User:hello|SALLY:Hello! How can I assist you today?
+- User:hello|SALLY:Hello! I'm here to help you with anything you need. How can I assist you today?
+- User:time|get_time->2026-09-01 21:58:34 
+- User:calc 25*40|calc->calc error unexpected indent (<unknown>, line 1)
+- User:weather in Lagos|get_weather->[TOOL] Weather key missing. Time: 2026-09-01 21:58:35  City: Lagos
+- User:hello|SALLY:Hello! I'm here to help you with anything you need. How can I assist you today?
+- User:time|get_time->2026-09-01 22:01:59 
+- User:calc 25*40|calc->calc error unexpected indent (<unknown>, line 1)
+- User:weather in Lagos|get_weather->[TOOL] Weather key missing. Time: 2026-09-01 22:02:03  City: Lagos
+- User:hello|SALLY:Hello! I'm here to help you with anything you need. How can I assist you today?
+- User:time|get_time->2026-09-01 22:15:30 
+- User:calc 25*40|calc->1000
+- User:weather in Lagos|get_weather->[TOOL] Weather key missing. Time: 2026-09-01 22:15:36  City: Lagos
