@@ -1,77 +1,121 @@
 from __future__ import annotations
 
 from .registry import AgentRegistry, create_default_registry
+from .router import RouteType, TaskRouter, create_router
 from .runtime import AgentRuntime
-from .types import AgentResult
+from .types import AgentResult, AgentStatus, ToolRequest
 
 
 class Coordinator:
     """
-    SALLY's first coordinator.
+    Top-level request coordinator.
 
-    This version uses deterministic routing rather than asking the LLM
-    to decide everything. LLM-based planning can be added later.
+    Routes obvious deterministic tasks directly to tools and
+    sends reasoning-oriented tasks to SALLY agents.
     """
 
     def __init__(
         self,
         registry: AgentRegistry | None = None,
         runtime: AgentRuntime | None = None,
+        router: TaskRouter | None = None,
     ) -> None:
         self.registry = registry or create_default_registry()
         self.runtime = runtime or AgentRuntime()
+        self.router = router or create_router()
 
     def choose_agent(self, objective: str) -> str:
-        text = objective.lower()
+        route = self.router.route(objective)
 
-        coding_words = (
-            "code",
-            "python",
-            "javascript",
-            "react",
-            "bug",
-            "debug",
-            "program",
-            "function",
-            "api",
-            "database",
-        )
-
-        research_words = (
-            "research",
-            "compare",
-            "investigate",
-            "find out",
-            "explain",
-            "analyze",
-        )
-
-        testing_words = (
-            "test",
-            "testing",
-            "review",
-            "error",
-            "failure",
-            "edge case",
-        )
-
-        if any(word in text for word in coding_words):
-            return "coding"
-
-        if any(word in text for word in testing_words):
-            return "testing"
-
-        if any(word in text for word in research_words):
-            return "research"
+        if route.route_type is RouteType.AGENT:
+            return route.target
 
         return "planning"
 
-    def run(self, objective: str, *, context: dict | None = None) -> AgentResult:
-        agent_name = self.choose_agent(objective)
-        spec = self.registry.get(agent_name)
+    def run(
+        self,
+        objective: str,
+        *,
+        context: dict | None = None,
+    ) -> AgentResult:
+        route = self.router.route(objective)
+
+        if route.route_type is RouteType.TOOL:
+            result = self.runtime.tools.execute(
+                ToolRequest(
+                    name=route.target,
+                    arguments=self._tool_arguments(
+                        route.target,
+                        objective,
+                    ),
+                )
+            )
+
+            if result.success:
+                output = str(result.output)
+
+                return AgentResult(
+                    task_id="tool-" + route.target,
+                    agent_name=route.target,
+                    status=AgentStatus.COMPLETE,
+                    output=output,
+                    steps=1,
+                    history=[],
+                )
+
+            return AgentResult(
+                task_id="tool-" + route.target,
+                agent_name=route.target,
+                status=AgentStatus.FAILED,
+                output="",
+                steps=1,
+                history=[],
+                error=result.error,
+            )
+
+        spec = self.registry.get(route.target)
 
         return self.runtime.run(
             spec,
             objective,
             context=context,
+        )
+
+    @staticmethod
+    def _tool_arguments(
+        tool_name: str,
+        objective: str,
+    ) -> dict:
+        if tool_name == "calculator":
+            expression = Coordinator._extract_expression(objective)
+            return {"expression": expression}
+
+        return {}
+
+    @staticmethod
+    def _extract_expression(objective: str) -> str:
+        text = objective.strip()
+
+        prefixes = (
+            "calculate ",
+            "compute ",
+            "what is ",
+            "how much is ",
+            "solve ",
+        )
+
+        lowered = text.lower()
+
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                return text[len(prefix):].strip().rstrip("?.!")
+
+        return text.rstrip("?.!")
+
+    def describe_route(self, objective: str) -> str:
+        route = self.router.route(objective)
+
+        return (
+            f"{route.route_type.value} → {route.target} "
+            f"({route.confidence:.2f}): {route.reason}"
         )
