@@ -28,6 +28,11 @@ class TaskRouter:
         r"\bwhat is\b.*[0-9].*(?:\+|-|\*|/|%|\^|times|plus|minus|divided)",
         r"\bhow much is\b.*[0-9]",
         r"\b\d+\s*(?:\+|-|\*|/|%|\^)\s*\d+",
+        r"\b(?:multiply|times)\b.*\d+.*\d+",
+        r"\b\d+\s+(?:times|plus|minus)\s+\d+",
+        r"\b\d+\s+divided\s+by\s+\d+",
+        r"\b(?:add|subtract|divide|multiply)\b.*\d+.*\d+",
+        r"^\s*(?:add|subtract|multiply|divide)\s+(?:by\s+)?-?\d+(?:\.\d+)?\s*$",
     )
 
     _DATETIME_PATTERNS = (
@@ -38,6 +43,34 @@ class TaskRouter:
         r"\btoday'?s date\b",
         r"\bcurrent date\b",
         r"\bdate today\b",
+    )
+
+    _UNIT_CONVERSION_PATTERNS = (
+        r"\bconvert\b.*\b(?:to|into|in)\b",
+        r"\b(?:km/h|mph|m/s|kg|mg|g|ms|millisecond|milliseconds|"
+        r"meters?|kilometers?|miles?|feet|ft|seconds?|minutes?|hours?)\b"
+        r".*\b(?:to|into|in)\b",
+        r"\bhow many\b.*\b(?:are\s+)?in\b.*\b(?:miles?|meters?|"
+        r"kilometers?|feet|seconds?|minutes?|hours?|milliseconds?|ms)\b",
+    )
+
+    _CONSTANT_PATTERNS = (
+        r"\bspeed of light\b",
+        r"\bgravitational constant\b",
+        r"\bplanck constant\b",
+        r"\bboltzmann constant\b",
+        r"\bavogadro (?:constant|number)\b",
+    )
+
+    _SCIENCE_CALC_PATTERNS = (
+        r"\bsqrt\s*\(",
+        r"\bsin\s*\(",
+        r"\bcos\s*\(",
+        r"\btan\s*\(",
+        r"\blog\s*\(",
+        r"\bln\s*\(",
+        r"\bscientific calculation\b",
+        r"\bscientific notation\b",
     )
 
     _CODING_PATTERNS = (
@@ -78,57 +111,81 @@ class TaskRouter:
 
         if not text:
             return Route(
-                route_type=RouteType.AGENT,
-                target="planning",
-                confidence=0.1,
-                reason="Empty objective.",
+                RouteType.AGENT,
+                "planning",
+                0.1,
+                "Empty objective.",
             )
 
         if self._matches(self._CALCULATOR_PATTERNS, text):
             return Route(
-                route_type=RouteType.TOOL,
-                target="calculator",
-                confidence=0.95,
-                reason="Detected an arithmetic/calculation request.",
+                RouteType.TOOL,
+                "calculator",
+                0.95,
+                "Detected an arithmetic/calculation request.",
             )
 
         if self._matches(self._DATETIME_PATTERNS, text):
             return Route(
-                route_type=RouteType.TOOL,
-                target="datetime",
-                confidence=0.95,
-                reason="Detected a date/time request.",
+                RouteType.TOOL,
+                "datetime",
+                0.95,
+                "Detected a date/time request.",
+            )
+
+        if self._matches(self._UNIT_CONVERSION_PATTERNS, text):
+            return Route(
+                RouteType.TOOL,
+                "unit_convert",
+                0.97,
+                "Detected a unit conversion request.",
+            )
+
+        if self._matches(self._CONSTANT_PATTERNS, text):
+            return Route(
+                RouteType.TOOL,
+                "scientific_constant",
+                0.97,
+                "Detected a scientific constant request.",
+            )
+
+        if self._matches(self._SCIENCE_CALC_PATTERNS, text):
+            return Route(
+                RouteType.TOOL,
+                "science_calculate",
+                0.93,
+                "Detected a scientific calculation request.",
             )
 
         if any(word in text for word in self._TESTING_PATTERNS):
             return Route(
-                route_type=RouteType.AGENT,
-                target="testing",
-                confidence=0.85,
-                reason="Detected testing/review intent.",
+                RouteType.AGENT,
+                "testing",
+                0.85,
+                "Detected testing/review intent.",
             )
 
         if any(word in text for word in self._CODING_PATTERNS):
             return Route(
-                route_type=RouteType.AGENT,
-                target="coding",
-                confidence=0.85,
-                reason="Detected software-development intent.",
+                RouteType.AGENT,
+                "coding",
+                0.85,
+                "Detected software-development intent.",
             )
 
         if any(word in text for word in self._RESEARCH_PATTERNS):
             return Route(
-                route_type=RouteType.AGENT,
-                target="research",
-                confidence=0.8,
-                reason="Detected research/investigation intent.",
+                RouteType.AGENT,
+                "research",
+                0.8,
+                "Detected research/investigation intent.",
             )
 
         return Route(
-            route_type=RouteType.AGENT,
-            target="planning",
-            confidence=0.5,
-            reason="No specialized intent detected.",
+            RouteType.AGENT,
+            "planning",
+            0.5,
+            "No specialized intent detected.",
         )
 
     @staticmethod

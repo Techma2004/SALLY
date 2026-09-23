@@ -36,6 +36,7 @@ class Gateway:
 
     def __init__(self, coordinator: Coordinator | None = None) -> None:
         self.coordinator = coordinator or Coordinator()
+        self._last_results: dict[str, str] = {}
 
     def handle(
         self,
@@ -50,10 +51,29 @@ class Gateway:
         if not message:
             raise ValueError("Message cannot be empty.")
 
+        request_context = dict(metadata or {})
+
+        if user_id in self._last_results:
+            request_context.setdefault(
+                "last_result",
+                self._last_results[user_id],
+            )
+
         result = self.coordinator.run(
             message,
-            context=metadata or {},
+            context=request_context,
         )
+
+        if (
+            result.status is AgentStatus.COMPLETE
+            and result.agent_name == "calculator"
+        ):
+            try:
+                float(result.output)
+                self._last_results[user_id] = result.output
+            except (TypeError, ValueError):
+                pass
+
 
         return GatewayResponse(
             answer=result.output,
@@ -78,6 +98,7 @@ class Gateway:
         )
 
         if response.status is AgentStatus.COMPLETE:
+            self._last_results[user_id] = response.answer
             return response.answer
 
         if response.error:

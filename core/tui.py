@@ -1,92 +1,189 @@
-import json, os
+from __future__ import annotations
+
+import os
 from pathlib import Path
+
+from core.config import PROJECT_ROOT, settings
+from core.gateway import Gateway
+
 try:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.completion import WordCompleter
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-    HAS_PT=True
-except: HAS_PT=False
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    HAS_RICH=True
-    console=Console()
-except: HAS_RICH=False
-from .brain import chat, get_llm
-from .memory import search_memory, load_user, init_db
-from .config import PROJECT_ROOT
-PROJECT_ROOT=Path(__file__).parent.parent
-HIST_FILE=PROJECT_ROOT/"memory"/"history.json"
-PT_HISTORY=PROJECT_ROOT/"memory"/".prompt_history"
-COMMANDS={"/new":"new session","/skills":"list skills","/memory":"search memory","/model":"model info","/usage":"usage","/learn":"learning stats","/help":"help","/exit":"exit","/quit":"exit"}
+    from prompt_toolkit.completion import WordCompleter
+    from prompt_toolkit.history import FileHistory
 
-def handle_command(cmd, history):
-    low=cmd.strip().lower()
-    if low in ["/new","/clear"]:
-        history.clear()
-        if HIST_FILE.exists(): HIST_FILE.write_text("[]")
-        return "[TUI] New session", True
-    if low.startswith("/memory") or low.startswith("recall "):
-        q=cmd.split(" ",1)[1] if " " in cmd else ""
-        res=search_memory(q,5)
-        if not res: return f"No memory for '{q}'", False
-        return "\n".join([f"- {r[:180]}" for r in res]), False
-    if low=="/skills":
-        from .tools import TOOLS, get_tool_descriptions_for_prompt
-        out="Available tools:\n" + get_tool_descriptions_for_prompt()
-        try:
-            from .learner import list_auto_skills
-            autos=list_auto_skills()
-            if autos: out+="\n\nAuto skills:\n" + "\n".join([f" - {p.name}" for p in autos])
-        except: pass
-        return out, False
-    if low=="/model":
-        mp=os.getenv("LLM_MODEL_PATH","models/Qwen2.5-Coder-1.5B-Instruct-Q3_K_L.gguf")
-        return f"Model: {mp} Exists: {Path(mp).exists()}", False
-    if low=="/usage":
-        db=PROJECT_ROOT/"memory"/"memory.db"
-        sz=db.stat().st_size/1024 if db.exists() else 0
-        return f"DB {sz:.1f}KB History {len(history)}", False
-    if low=="/learn":
-        try:
-            from .learner import get_tool_stats, list_auto_skills
-            stats=get_tool_stats()
-            out="Tool usage:\n" + "\n".join([f"{t} x{c}" for t,c,_ in stats]) if stats else "No usage yet"
-            autos=list_auto_skills()
-            out+=f"\n\nAuto skills {len(autos)}:\n" + "\n".join([p.name for p in autos])
-            return out, False
-        except Exception as e: return f"Learner error {e}", False
-    if low in ["/help","/h"]:
-        return "\n".join([f"{k} - {v}" for k,v in COMMANDS.items()]), False
-    if low in ["/exit","/quit","/bye"]: return "EXIT", True
-    return None, False
+    HAS_PROMPT_TOOLKIT = True
+except ImportError:
+    HAS_PROMPT_TOOLKIT = False
 
-def run_tui():
-    init_db()
-    history=json.loads(HIST_FILE.read_text()) if HIST_FILE.exists() else []
-    if HAS_PT:
-        session=PromptSession(history=FileHistory(str(PT_HISTORY)), completer=WordCompleter(list(COMMANDS.keys()), ignore_case=True), auto_suggest=AutoSuggestFromHistory())
-    else: session=None
-    print("=== SALLY v0.44 Hermes TUI + Learner === /help /learn")
-    try: get_llm()
-    except Exception as e: print(f"LLM warn {e}")
+
+HISTORY_FILE = PROJECT_ROOT / "memory" / ".prompt_history"
+
+COMMANDS = {
+    "/new": "clear the current prompt history",
+    "/memory": "search SALLY's memory",
+    "/skills": "list registered tools",
+    "/model": "show the configured model",
+    "/usage": "show local runtime information",
+    "/help": "show commands",
+    "/exit": "exit SALLY",
+    "/quit": "exit SALLY",
+}
+
+
+def _command_help() -> str:
+    return "\n".join(
+        f"{name} - {description}"
+        for name, description in COMMANDS.items()
+    )
+
+
+def _handle_command(
+    command: str,
+    gateway: Gateway,
+) -> str | None:
+    stripped = command.strip()
+    lowered = stripped.lower()
+
+    if lowered in {"/exit", "/quit"}:
+        return "EXIT"
+
+    if lowered in {"/help", "/h"}:
+        return _command_help()
+
+    if lowered == "/new":
+        if HISTORY_FILE.exists():
+            HISTORY_FILE.write_text("", encoding="utf-8")
+        return "Prompt history cleared."
+
+    if lowered.startswith("/memory") or lowered.startswith("recall "):
+        query = (
+            stripped.split(" ", 1)[1]
+            if " " in stripped
+            else ""
+        ).strip()
+
+        if not query:
+            return "Usage: /memory <query>"
+
+        memories = gateway.coordinator.memory.search(
+            query,
+            limit=5,
+        )
+
+        if not memories:
+            return "No matching memories found."
+
+        return "\n".join(
+            f"- [{memory.memory_type.value}] {memory.content}"
+            for memory in memories
+        )
+
+    if lowered == "/skills":
+        tools = gateway.coordinator.runtime.tools.names()
+
+        if not tools:
+            return "No tools registered."
+
+        return "Registered tools:\n" + "\n".join(
+            f"- {name}"
+            for name in tools
+        )
+
+    if lowered == "/model":
+        model_path = Path(settings.llm.model_path)
+
+        if not model_path.is_absolute():
+            model_path = PROJECT_ROOT / model_path
+
+        return (
+            f"Model: {settings.llm.model_path}\n"
+            f"Exists: {model_path.exists()}\n"
+            f"Context: {settings.llm.n_ctx}\n"
+            f"Threads: {settings.llm.n_threads}"
+        )
+
+    if lowered == "/usage":
+        db_path = PROJECT_ROOT / "memory" / "memory.db"
+        size_kb = (
+            db_path.stat().st_size / 1024
+            if db_path.exists()
+            else 0
+        )
+
+        return (
+            f"Memory DB: {size_kb:.1f} KB\n"
+            f"Active tasks: "
+            f"{len(gateway.coordinator.runtime.active_tasks)}"
+        )
+
+    return None
+
+
+def run_tui() -> None:
+    gateway = Gateway()
+
+    if HAS_PROMPT_TOOLKIT:
+        session = PromptSession(
+            history=FileHistory(str(HISTORY_FILE)),
+            completer=WordCompleter(
+                list(COMMANDS),
+                ignore_case=True,
+            ),
+            auto_suggest=AutoSuggestFromHistory(),
+        )
+    else:
+        session = None
+
+    print(
+        f"=== {settings.sally.name} "
+        f"v{settings.sally.version} ==="
+    )
+    print("Type /help for commands.")
+
     while True:
-        try: u=session.prompt("\nYou: ") if HAS_PT else input("\nYou: ")
-        except: break
-        u=u.strip()
-        if not u: continue
-        if u.startswith("/") or u.lower().startswith("recall "):
-            res,clr=handle_command(u,history)
-            if res=="EXIT": break
-            if res: print(f"\n{res}\n")
-            if u.startswith("/memory") or u.lower().startswith("recall "): continue
-            if res and u.startswith("/"): continue
         try:
-            from .memory import learn
-            learn(u)
-        except: pass
-        ans=chat("user", u)
-        print(f"\nSALLY: {ans}\n")
-        history.append({"role":"user","content":u}); history.append({"role":"assistant","content":ans})
-        HIST_FILE.write_text(json.dumps(history[-20:], indent=2))
+            message = (
+                session.prompt("\nYou: ")
+                if session is not None
+                else input("\nYou: ")
+            )
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            break
+
+        message = message.strip()
+
+        if not message:
+            continue
+
+        if message.startswith("/") or message.lower().startswith("recall "):
+            command_result = _handle_command(
+                message,
+                gateway,
+            )
+
+            if command_result == "EXIT":
+                print("Goodbye.")
+                break
+
+            if command_result is not None:
+                print(f"\n{command_result}")
+                continue
+
+        try:
+            response = gateway.handle(
+                message,
+                user_id="local",
+                source="tui",
+            )
+
+            if response.answer:
+                print(f"\nSALLY: {response.answer}")
+            elif response.error:
+                print(f"\nSALLY: {response.error}")
+            else:
+                print("\nSALLY: No response.")
+
+        except Exception as exc:
+            print(f"\nSALLY error: {exc}")

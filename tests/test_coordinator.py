@@ -95,3 +95,47 @@ def test_coordinator_passes_relevant_memories_to_agent(tmp_path):
     combined = "\n".join(message["content"] for message in messages)
 
     assert "Edima prefers professional sleek interfaces." in combined
+
+
+def test_coordinator_calculates_natural_multiplication():
+    coordinator = Coordinator()
+
+    result = coordinator.run(
+        "Could you multiply 25 by 40?"
+    )
+
+    assert result.status is AgentStatus.COMPLETE
+    assert result.output == "1000"
+
+
+def test_coordinator_passes_science_result_through_inference():
+    from core.agent.inference import InferenceEngine
+
+    captured = {}
+
+    def fake_llm(messages, *, max_tokens=None, temperature=None):
+        captured["messages"] = messages
+        return "72 kilometres per hour is exactly 20 metres per second."
+
+    coordinator = Coordinator(
+        inference=InferenceEngine(llm=fake_llm),
+    )
+
+    result = coordinator.run(
+        "Convert 72 km/h to m/s"
+    )
+
+    assert result.status is AgentStatus.COMPLETE
+    assert result.agent_name == "inference"
+    assert (
+        result.output
+        == "72 kilometres per hour is exactly 20 metres per second."
+    )
+
+    combined = "\n".join(
+        message["content"]
+        for message in captured["messages"]
+    )
+
+    assert "unit_conversion" in combined
+    assert "20.0" in combined

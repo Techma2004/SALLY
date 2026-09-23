@@ -1,4 +1,4 @@
-from core.agent.router import RouteType, create_router
+from core.agent.router import TaskRouter, RouteType, create_router
 
 
 def test_router_routes_calculation_to_calculator():
@@ -53,3 +53,53 @@ def test_router_routes_general_requests_to_planning():
 
     assert route.route_type is RouteType.AGENT
     assert route.target == "planning"
+
+
+def test_router_detects_natural_multiplication():
+    router = TaskRouter()
+    route = router.route("Could you multiply 25 by 40?")
+
+    assert route.route_type is RouteType.TOOL
+    assert route.target == "calculator"
+
+
+def test_router_detects_word_arithmetic():
+    router = TaskRouter()
+
+    for prompt in (
+        "25 times 40",
+        "25 plus 40",
+        "25 minus 40",
+        "25 divided by 40",
+    ):
+        route = router.route(prompt)
+
+        assert route.route_type is RouteType.TOOL
+        assert route.target == "calculator"
+
+
+def test_router_routes_unit_conversion_to_science():
+    router = create_router()
+
+    route = router.route("Convert 72 km/h to m/s")
+
+    assert route.route_type is RouteType.TOOL
+    assert route.target == "unit_convert"
+
+
+def test_router_routes_scientific_constant():
+    router = create_router()
+
+    route = router.route("What is the speed of light?")
+
+    assert route.route_type is RouteType.TOOL
+    assert route.target == "scientific_constant"
+
+
+def test_router_routes_scientific_calculation():
+    router = create_router()
+
+    route = router.route("Evaluate sqrt(144)")
+
+    assert route.route_type is RouteType.TOOL
+    assert route.target == "science_calculate"

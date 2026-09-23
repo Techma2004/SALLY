@@ -64,3 +64,159 @@ def _evaluate(node: ast.AST):
         return operation(left, right)
 
     raise ValueError("Only basic arithmetic is supported.")
+
+
+
+def _natural_number(value: str) -> str:
+    return value.strip().replace(",", "")
+
+
+def natural_expression(
+    text: str,
+    *,
+    base_value: str | None = None,
+) -> str | None:
+    """
+    Convert common natural-language arithmetic into a safe arithmetic
+    expression. Returns None when the phrase is not recognized.
+    """
+    import re
+
+    text = text.strip().rstrip("?.!")
+    lowered = text.lower()
+
+    if re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", lowered):
+        return lowered
+
+    # Follow-up operations such as "divide by 56".
+    if base_value is not None:
+        follow = re.fullmatch(
+            r"(?:please\s+)?"
+            r"(add|subtract|multiply|divide)"
+            r"(?:\s+the\s+result)?"
+            r"(?:\s+by|\s+with|\s+and)?\s*"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:\s*[\+\-\*/%]\s*"
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+))*)",
+            lowered,
+        )
+        if follow:
+            operator_name, operand = follow.groups()
+            operator_symbol = {
+                "add": "+",
+                "subtract": "-",
+                "multiply": "*",
+                "divide": "/",
+            }[operator_name]
+            return f"({base_value}) {operator_symbol} ({operand})"
+
+    # Explicit binary phrases.
+    patterns = (
+        (
+            r"(?:could you\s+)?multiply\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+by\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "*",
+        ),
+        (
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+times\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "*",
+        ),
+        (
+            r"(?:add)\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+and\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "+",
+        ),
+        (
+            r"(?:subtract)\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+from\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "reverse_subtract",
+        ),
+        (
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+minus\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "-",
+        ),
+        (
+            r"(?:divide)\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+by\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "/",
+        ),
+        (
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+divided\s+by\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "/",
+        ),
+        (
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s+plus\s+"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+            "+",
+        ),
+    )
+
+    for pattern, operator_symbol in patterns:
+        match = re.fullmatch(pattern, lowered)
+        if not match:
+            continue
+
+        left, right = match.groups()
+
+        if operator_symbol == "reverse_subtract":
+            return f"({_natural_number(right)}) - ({_natural_number(left)})"
+
+        return (
+            f"({_natural_number(left)}) "
+            f"{operator_symbol} "
+            f"({_natural_number(right)})"
+        )
+
+    # Chained operations:
+    # "multiply 45 by 67 and add with 100 and divide by 100 ..."
+    parts = re.split(r"\s+\band\b\s+", lowered)
+
+    if len(parts) >= 2:
+        first = parts[0].strip()
+        base_expression = natural_expression(
+            first,
+            base_value=base_value,
+        )
+
+        if base_expression:
+            expression = base_expression
+
+            for part in parts[1:]:
+                part = part.strip()
+                match = re.fullmatch(
+                    r"(add|subtract|multiply|divide)"
+                    r"(?:\s+with|\s+by|\s+and)?\s*"
+                    r"(.+)",
+                    part,
+                )
+
+                if not match:
+                    return None
+
+                operation, operand = match.groups()
+                if not re.fullmatch(
+                    r"[-+*/%().\d\s]+",
+                    operand,
+                ):
+                    return None
+
+                symbol = {
+                    "add": "+",
+                    "subtract": "-",
+                    "multiply": "*",
+                    "divide": "/",
+                }[operation]
+
+                expression = (
+                    f"({expression}) {symbol} ({operand.strip()})"
+                )
+
+            return expression
+
+    return None

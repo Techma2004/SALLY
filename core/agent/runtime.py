@@ -64,7 +64,14 @@ class AgentRuntime:
             '{"action":"<your_action>","tool":"<registered_tool>",'
             '"arguments":{...}}\n\n'
             f"Available tools: {tools_text}\n"
-            "Never invent a tool name that is not listed above."
+            "Never invent a tool name that is not listed above.\n"
+            "You do not have web browsing, URL opening, messaging, "
+            "filesystem access, or external-action capabilities unless "
+            "a corresponding registered tool is explicitly listed.\n"
+            "Never invent URLs, claim that you searched the web, or claim "
+            "that you performed an external action when you did not.\n"
+            "When a requested capability is unavailable, say so plainly "
+            "and answer from the capabilities you actually have."
         )
 
     @staticmethod
@@ -347,3 +354,6 @@ class AgentRuntime:
                 history=task.steps.copy(),
                 error=str(exc),
             )
+
+        finally:
+            self.active_tasks.pop(task.task_id, None)

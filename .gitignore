@@ -21,3 +21,4 @@ sally.egg-info/
 
 web/node_modules/
 web/dist/
+memory/.prompt_history

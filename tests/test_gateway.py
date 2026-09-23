@@ -51,3 +51,16 @@ def test_gateway_rejects_empty_message():
         assert "empty" in str(exc).lower()
     else:
         raise AssertionError("Expected empty-message validation error.")
+
+
+def test_gateway_uses_default_safe_tools():
+    gateway = Gateway()
+
+    response = gateway.handle(
+        "Calculate 25 * 40",
+        user_id="test-user",
+        source="test",
+    )
+
+    assert response.status.value == "complete"
+    assert response.answer == "1000"

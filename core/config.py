@@ -89,7 +89,7 @@ def get_settings() -> Settings:
     return Settings(
         sally=SallySettings(
             name=_env("SALLY_NAME", "SALLY"),
-            version=_env("SALLY_VERSION", "0.1.0"),
+            version=_env("SALLY_VERSION", "0.2.0"),
         ),
         llm=LLMSettings(
             model_path=_env(

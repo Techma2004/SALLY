@@ -128,3 +128,15 @@ def test_agent_runtime_accepts_dynamic_action_name():
         == "Keep the interface professional and simple."
     )
     assert result.steps == 1
+
+
+def test_tool_registry_marks_inference_tools():
+    tools = ToolRegistry()
+
+    tools.register(
+        "science",
+        lambda: {"result": 42},
+        requires_inference=True,
+    )
+
+    assert tools.requires_inference("science")
