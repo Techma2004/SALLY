@@ -155,6 +155,19 @@ class MemoryStore:
 
         limit = max(1, min(limit, 50))
 
+        # Build a tolerant FTS query from individual words.
+        # Prefix matching lets "interface" match "interfaces".
+        terms = [
+            term.strip('.,!?;:"\'()[]{}')
+            for term in query.split()
+        ]
+        terms = [term for term in terms if term]
+
+        fts_query = " OR ".join(
+            f'"{term}"*'
+            for term in terms
+        )
+
         with self._connect() as connection:
             try:
                 rows = connection.execute(
@@ -172,7 +185,7 @@ class MemoryStore:
                     ORDER BY rank
                     LIMIT ?
                     """,
-                    (query, limit),
+                    (fts_query, limit),
                 ).fetchall()
             except sqlite3.OperationalError:
                 rows = connection.execute(

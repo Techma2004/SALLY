@@ -1,45 +1,33 @@
 from core.memory import MemoryStore, MemoryType
 
 
-def main() -> None:
-    print("=== SALLY V3.5 MEMORY STORE ===")
+def test_memory_store_save_and_search(tmp_path):
+    db_path = tmp_path / "test_memory.db"
+    store = MemoryStore(db_path=str(db_path))
 
-    store = MemoryStore()
-
-    before = store.recent(100)
-    print(f"Existing memories: {len(before)}")
-
-    memory = store.save(
-        "SALLY memory store V3.5 test.",
-        memory_type=MemoryType.EPISODE,
-        importance=0.7,
+    saved = store.save(
+        "SALLY isolated memory store test.",
+        memory_type=MemoryType.FACT,
+        importance=0.8,
     )
 
-    print("\nSaved:")
-    print("  ID        :", memory.id)
-    print("  Type      :", memory.memory_type.value)
-    print("  Importance:", memory.importance)
+    assert saved.content == "SALLY isolated memory store test."
+    assert saved.memory_type is MemoryType.FACT
 
-    results = store.search("SALLY memory store V3.5", limit=5)
+    results = store.search("isolated memory store", limit=5)
 
-    print("\nSearch results:")
-    for item in results:
-        print(f"  [{item.memory_type.value}] {item.content}")
-
-    assert results
-    assert any(item.id == memory.id for item in results)
-
-    recent = store.recent(5)
-
-    print("\nRecent memories:")
-    for item in recent:
-        print(f"  [{item.memory_type.value}] {item.content}")
-
-    user_model = store.get_user_model()
-    print(f"\nUser model entries: {len(user_model)}")
-
-    print("\n✅ MEMORY STORE TEST PASSED")
+    assert any(item.id == saved.id for item in results)
 
 
-if __name__ == "__main__":
-    main()
+def test_memory_store_recent(tmp_path):
+    db_path = tmp_path / "test_memory.db"
+    store = MemoryStore(db_path=str(db_path))
+
+    saved = store.save(
+        "Recent memory test.",
+        memory_type=MemoryType.EPISODE,
+    )
+
+    recent = store.recent(limit=10)
+
+    assert any(item.id == saved.id for item in recent)

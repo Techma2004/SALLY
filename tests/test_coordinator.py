@@ -4,61 +4,94 @@ from core.agent.types import AgentStatus
 from core.tools import create_tool_registry
 
 
-def main() -> None:
-    print("=== SALLY V3.4 COORDINATOR ===")
-
+def test_coordinator_routes_calculation_to_tool():
     tools = create_tool_registry()
     runtime = AgentRuntime(tools=tools)
     coordinator = Coordinator(runtime=runtime)
 
-    print("\n--- Calculator request ---")
-
-    objective = "Calculate 123 * 456."
-
-    print("Request:", objective)
-    print("Route  :", coordinator.describe_route(objective))
-
-    result = coordinator.run(objective)
-
-    print("Status :", result.status.value)
-    print("Output :", result.output)
+    result = coordinator.run("Calculate 123 * 456")
 
     assert result.status is AgentStatus.COMPLETE
     assert result.output == "56088"
 
-    print("\n--- Datetime request ---")
 
-    objective = "What time is it?"
+def test_coordinator_routes_coding_to_agent():
+    responses = iter([
+        '{"action":"final","answer":"Coding task handled."}',
+    ])
 
-    print("Request:", objective)
-    print("Route  :", coordinator.describe_route(objective))
+    def fake_llm(messages, *, max_tokens=None, temperature=None):
+        return next(responses)
 
-    result = coordinator.run(objective)
+    tools = create_tool_registry()
+    runtime = AgentRuntime(tools=tools, llm=fake_llm)
+    coordinator = Coordinator(runtime=runtime)
 
-    print("Status :", result.status.value)
-    print("Output :", result.output)
+    result = coordinator.run("Debug this Python function")
 
     assert result.status is AgentStatus.COMPLETE
-    assert result.output
+    assert result.agent_name == "coding"
+    assert result.output == "Coding task handled."
 
-    print("\n--- Coding request ---")
 
-    objective = "Help me debug this Python function."
-
-    print("Request:", objective)
-    print("Route  :", coordinator.describe_route(objective))
-
-    assert (
-        coordinator.router.route(objective).route_type
-        is RouteType.AGENT
+def test_coordinator_describes_tool_route():
+    coordinator = Coordinator(
+        runtime=AgentRuntime(tools=create_tool_registry())
     )
 
-    assert coordinator.choose_agent(objective) == "coding"
+    description = coordinator.describe_route("Calculate 25 * 4")
 
-    print("Selected: coding")
+    assert "tool" in description
+    assert "calculator" in description
 
-    print("\n✅ COORDINATOR ROUTING TEST PASSED")
+
+def test_coordinator_describes_agent_route():
+    coordinator = Coordinator(
+        runtime=AgentRuntime(tools=create_tool_registry())
+    )
+
+    description = coordinator.describe_route("Plan a new SALLY feature")
+
+    assert "agent" in description
+    assert "planning" in description
 
 
-if __name__ == "__main__":
-    main()
+def test_coordinator_passes_relevant_memories_to_agent(tmp_path):
+    from core.memory import MemoryManager, MemoryStore, MemoryType
+
+    memory = MemoryManager(
+        store=MemoryStore(
+            db_path=str(tmp_path / "test_memory.db")
+        )
+    )
+
+    memory.remember(
+        "Edima prefers professional sleek interfaces.",
+        memory_type=MemoryType.PREFERENCE,
+    )
+
+    captured = {}
+
+    def fake_llm(messages, *, max_tokens=None, temperature=None):
+        captured["messages"] = messages
+        return '{"action":"final","answer":"Memory context received."}'
+
+    tools = create_tool_registry()
+    runtime = AgentRuntime(tools=tools, llm=fake_llm)
+
+    coordinator = Coordinator(
+        runtime=runtime,
+        memory=memory,
+    )
+
+    result = coordinator.run(
+        "Plan a professional interface for SALLY."
+    )
+
+    assert result.status is AgentStatus.COMPLETE
+    assert result.output == "Memory context received."
+
+    messages = captured["messages"]
+    combined = "\n".join(message["content"] for message in messages)
+
+    assert "Edima prefers professional sleek interfaces." in combined

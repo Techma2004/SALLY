@@ -1,47 +1,44 @@
-from core.memory import MemoryManager, MemoryType
+from core.memory import MemoryManager, MemoryStore, MemoryType
 
 
-TEST_CONTENT = "SALLY V3.5 MemoryManager test record."
+def make_memory_manager(tmp_path):
+    store = MemoryStore(db_path=str(tmp_path / "test_memory.db"))
+    return MemoryManager(store=store)
 
 
-def main() -> None:
-    print("=== SALLY V3.5 MEMORY MANAGER ===")
-
-    memory = MemoryManager()
-
-    before = memory.search("SALLY V3.5 MemoryManager", limit=10)
-    print(f"Existing matching memories: {len(before)}")
+def test_memory_manager_remember_and_search(tmp_path):
+    memory = make_memory_manager(tmp_path)
 
     saved = memory.remember(
-        TEST_CONTENT,
+        "SALLY isolated MemoryManager test.",
         memory_type=MemoryType.EPISODE,
-        importance=0.7,
+        importance=0.5,
     )
 
-    print("\nSaved:")
-    print("  ID        :", saved.id)
-    print("  Type      :", saved.memory_type.value)
-    print("  Importance:", saved.importance)
+    assert saved.content == "SALLY isolated MemoryManager test."
+    assert saved.memory_type is MemoryType.EPISODE
 
-    results = memory.search("SALLY V3.5 MemoryManager", limit=5)
-
-    print("\nSearch results:")
-    for item in results:
-        print(f"  [{item.memory_type.value}] {item.content}")
+    results = memory.search("isolated MemoryManager", limit=10)
 
     assert any(item.id == saved.id for item in results)
 
-    recent = memory.recent(limit=5)
 
-    print("\nRecent memories:")
-    for item in recent:
-        print(f"  [{item.memory_type.value}] {item.content}")
+def test_memory_manager_recent(tmp_path):
+    memory = make_memory_manager(tmp_path)
 
-    profile = memory.profile()
-    print(f"\nUser model entries: {len(profile)}")
+    saved = memory.remember(
+        "SALLY recent memory test.",
+        memory_type=MemoryType.FACT,
+    )
 
-    print("\n✅ MEMORY MANAGER TEST PASSED")
+    recent = memory.recent(limit=10)
+
+    assert any(item.id == saved.id for item in recent)
 
 
-if __name__ == "__main__":
-    main()
+def test_memory_manager_profile(tmp_path):
+    memory = make_memory_manager(tmp_path)
+
+    entries = memory.profile()
+
+    assert isinstance(entries, list)
