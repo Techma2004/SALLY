@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from uuid import uuid4
 from collections.abc import Callable
+from uuid import uuid4
 
 from core.config import settings
 from core.llm import chat as llm_chat
 
-from .protocol import ActionType, parse_action
+from .protocol import parse_action
 from .tools import ToolRegistry
 from .types import (
     AgentResult,
@@ -25,21 +25,9 @@ class AgentRuntime:
     """
     Executes SALLY agents through a real tool/observation loop.
 
-    Flow:
-
-        LLM decision
-            ↓
-        tool request
-            ↓
-        tool execution
-            ↓
-        observation
-            ↓
-        LLM decision
-            ↓
-        final answer
-
-    Runtime limits are controlled centrally through SALLY configuration.
+    Action names are dynamic and model-defined. The runtime interprets
+    the structure of an action rather than maintaining a hardcoded
+    vocabulary of possible action names.
     """
 
     def __init__(
@@ -59,22 +47,24 @@ class AgentRuntime:
 
     def _system_prompt(self, spec: AgentSpec) -> str:
         available = self._available_tools(spec)
-
-        if available:
-            tools_text = ", ".join(available)
-        else:
-            tools_text = "none"
+        tools_text = ", ".join(available) if available else "none"
 
         return (
             f"{spec.system_prompt}\n\n"
             "You are operating inside SALLY's agent runtime.\n"
-            "You MUST respond with exactly one JSON object and no surrounding explanation.\n\n"
-            "To use a tool:\n"
-            '{"action":"tool","tool":"<tool_name>","arguments":{...}}\n\n'
-            "To finish:\n"
-            '{"action":"final","answer":"<answer>"}\n\n'
+            "You MUST respond with exactly one JSON object and no "
+            "surrounding explanation.\n\n"
+            "Action names are dynamic. Choose any concise action name "
+            "that accurately describes what you are doing. "
+            "Action names are not predefined.\n\n"
+            "To provide a final response, include an 'answer' field.\n"
+            '{"action":"<your_action>","answer":"<your_answer>"}\n\n'
+            "To use an executable capability, include a registered "
+            "tool name and its arguments.\n"
+            '{"action":"<your_action>","tool":"<registered_tool>",'
+            '"arguments":{...}}\n\n'
             f"Available tools: {tools_text}\n"
-            "Never invent a tool that is not listed above."
+            "Never invent a tool name that is not listed above."
         )
 
     @staticmethod
@@ -90,7 +80,11 @@ class AgentRuntime:
                 "error": result.error,
             }
 
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            default=str,
+        )
 
     def run(
         self,
@@ -184,53 +178,38 @@ class AgentRuntime:
                         error=task.error,
                     )
 
-                if action.action is ActionType.FINAL:
-                    task.steps.append(
-                        AgentStep(
-                            number=step_number,
-                            step_type=StepType.FINAL,
-                            output=action.answer or "",
+                # Explicit tool takes precedence.
+                # A dynamic action name may also directly identify a
+                # registered tool without requiring a separate `tool`.
+                tool_name = (
+                    action.tool
+                    or (
+                        action.action.lower()
+                        if self.tools.has(action.action.lower())
+                        else ""
+                    )
+                )
+
+                if tool_name:
+                    tool_name = tool_name.strip().lower()
+
+                    if tool_name not in spec.allowed_tools:
+                        task.status = AgentStatus.FAILED
+                        task.error = (
+                            f"Agent '{spec.name}' is not allowed to use "
+                            f"tool '{tool_name}'."
                         )
-                    )
 
-                    task.status = AgentStatus.COMPLETE
-                    task.result = action.answer or ""
+                        return AgentResult(
+                            task_id=task.task_id,
+                            agent_name=spec.name,
+                            status=AgentStatus.FAILED,
+                            output="",
+                            steps=step_number,
+                            history=task.steps.copy(),
+                            error=task.error,
+                        )
 
-                    return AgentResult(
-                        task_id=task.task_id,
-                        agent_name=spec.name,
-                        status=AgentStatus.COMPLETE,
-                        output=task.result,
-                        steps=step_number,
-                        history=task.steps.copy(),
-                    )
-
-                tool_name = action.tool or ""
-
-                if tool_name not in spec.allowed_tools:
-                    task.status = AgentStatus.FAILED
-                    task.error = (
-                        f"Agent '{spec.name}' is not allowed to use "
-                        f"tool '{tool_name}'."
-                    )
-
-                    return AgentResult(
-                        task_id=task.task_id,
-                        agent_name=spec.name,
-                        status=AgentStatus.FAILED,
-                        output="",
-                        steps=step_number,
-                        history=task.steps.copy(),
-                        error=task.error,
-                    )
-
-                if not self.tools.has(tool_name):
-                    tool_result = ToolResult(
-                        name=tool_name,
-                        success=False,
-                        error=f"Unknown tool: {tool_name}",
-                    )
-                else:
                     tool_request = ToolRequest(
                         name=tool_name,
                         arguments=action.arguments,
@@ -246,12 +225,76 @@ class AgentRuntime:
 
                     tool_result = self.tools.execute(tool_request)
 
+                    task.steps.append(
+                        AgentStep(
+                            number=step_number,
+                            step_type=StepType.OBSERVE,
+                            tool_result=tool_result,
+                            output=self._format_tool_result(
+                                tool_result
+                            ),
+                        )
+                    )
+
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": raw_output,
+                        }
+                    )
+
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Tool `{tool_name}` returned:\n"
+                                f"{self._format_tool_result(tool_result)}\n\n"
+                                "Continue the objective. Respond with "
+                                "exactly one JSON object."
+                            ),
+                        }
+                    )
+
+                    continue
+
+                # Any dynamic action with an answer is a valid final
+                # response, regardless of the action name.
+                if action.answer:
+                    task.steps.append(
+                        AgentStep(
+                            number=step_number,
+                            step_type=StepType.FINAL,
+                            output=action.answer,
+                        )
+                    )
+
+                    task.status = AgentStatus.COMPLETE
+                    task.result = action.answer
+
+                    return AgentResult(
+                        task_id=task.task_id,
+                        agent_name=spec.name,
+                        status=AgentStatus.COMPLETE,
+                        output=task.result,
+                        steps=step_number,
+                        history=task.steps.copy(),
+                    )
+
+                # Unknown non-executable action: do not invent behavior
+                # for it. Feed a structured observation back to the model
+                # and let it decide what to do next.
+                observation = (
+                    f"Action `{action.action}` is not an executable "
+                    "registered tool, so no tool was run. Continue the "
+                    "objective by providing an answer or using a "
+                    "registered tool."
+                )
+
                 task.steps.append(
                     AgentStep(
                         number=step_number,
                         step_type=StepType.OBSERVE,
-                        tool_result=tool_result,
-                        output=self._format_tool_result(tool_result),
+                        output=observation,
                     )
                 )
 
@@ -265,12 +308,7 @@ class AgentRuntime:
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            f"Tool `{tool_name}` returned:\n"
-                            f"{self._format_tool_result(tool_result)}\n\n"
-                            "Continue the objective. Respond with exactly "
-                            "one JSON object."
-                        ),
+                        "content": observation,
                     }
                 )
 

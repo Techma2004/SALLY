@@ -97,3 +97,34 @@ def test_agent_runtime_rejects_invalid_action():
     assert result.output == ""
     assert result.error is not None
     assert "Invalid agent action" in result.error
+
+
+def test_agent_runtime_accepts_dynamic_action_name():
+    tools = ToolRegistry()
+
+    def fake_llm(messages, *, max_tokens=None, temperature=None):
+        return (
+            '{"action":"design",'
+            '"answer":"Keep the interface professional and simple."}'
+        )
+
+    runtime = AgentRuntime(tools=tools, llm=fake_llm)
+
+    spec = AgentSpec(
+        name="dynamic-agent",
+        role="Dynamic Agent",
+        description="Dynamic action test.",
+        system_prompt="You are a dynamic test agent.",
+    )
+
+    result = runtime.run(
+        spec,
+        "Design a small inventory interface.",
+    )
+
+    assert result.status is AgentStatus.COMPLETE
+    assert (
+        result.output
+        == "Keep the interface professional and simple."
+    )
+    assert result.steps == 1
