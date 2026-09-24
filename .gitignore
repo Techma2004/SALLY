@@ -10,15 +10,13 @@ venv/
 __pycache__/
 *.db
 *.pyc
-.env
 memory/telegram_chat_ids.json
-memory/daily/
 
 .venv/
 sally.egg-info/
 .sallyforge/
 
-
 web/node_modules/
 web/dist/
 memory/.prompt_history
+exports/
