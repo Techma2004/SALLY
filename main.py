@@ -5,6 +5,9 @@ import argparse
 from core.config import settings
 
 
+WEB_PORT = 8080
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="SALLY interface launcher"
@@ -12,18 +15,12 @@ def main() -> None:
     parser.add_argument(
         "interface",
         nargs="?",
-        choices=("tui", "web", "telegram"),
-        default="tui",
+        choices=("web", "telegram"),
+        default="web",
         help="interface to launch",
     )
 
     args = parser.parse_args()
-
-    if args.interface == "tui":
-        from core.tui import run_tui
-
-        run_tui()
-        return
 
     if args.interface == "web":
         import uvicorn
@@ -31,7 +28,7 @@ def main() -> None:
         uvicorn.run(
             "core.gateway.web:app",
             host=settings.server.host,
-            port=settings.server.port,
+            port=WEB_PORT,
             reload=False,
         )
         return
