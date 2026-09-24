@@ -70,6 +70,12 @@ function App() {
   const userId = useMemo(getUserId, []);
 
   useEffect(() => {
+    const cleanupKey = "sally-legacy-cache-cleaned-v1";
+
+    if (sessionStorage.getItem(cleanupKey) === "1") {
+      return;
+    }
+
     let active = true;
 
     (async () => {
@@ -88,6 +94,8 @@ function App() {
       } catch {
         // Legacy local service-worker cleanup is best effort.
       }
+
+      sessionStorage.setItem(cleanupKey, "1");
 
       if (active) {
         window.setTimeout(() => window.location.reload(), 0);
