@@ -119,7 +119,7 @@ def get_settings() -> Settings:
         ),
         server=ServerSettings(
             host=_env("HOST", "127.0.0.1"),
-            port=_int("PORT", 8080),
+            port=_int("PORT", 5678),
         ),
     )
 
