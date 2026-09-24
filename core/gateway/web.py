@@ -21,7 +21,7 @@ WEB_DIST = ROOT / "web" / "dist"
 
 gateway = Gateway()
 whatsapp_gateway = WhatsAppGateway(gateway)
-WEB_PORT = 5678
+WEB_PORT = settings.server.port
 
 app = FastAPI(
     title="SALLY Gateway",
@@ -220,6 +220,13 @@ def tools() -> dict[str, object]:
     }
 
 
+def _model_path_exists() -> bool:
+    model_path = Path(settings.llm.model_path)
+    if not model_path.is_absolute():
+        model_path = ROOT / model_path
+    return model_path.exists()
+
+
 @app.get("/health")
 def health() -> dict[str, object]:
     return {
@@ -227,6 +234,8 @@ def health() -> dict[str, object]:
         "name": settings.sally.name,
         "version": settings.sally.version,
         "web_dist": WEB_DIST.exists(),
+        "model_exists": _model_path_exists(),
+        "web_port": WEB_PORT,
     }
 
 
@@ -234,8 +243,15 @@ def health() -> dict[str, object]:
 def system_stats() -> dict[str, object]:
     vm = psutil.virtual_memory()
     disk = psutil.disk_usage(str(ROOT))
-    db_path = ROOT / "memory" / "memory.db"
-    db_size_mb = db_path.stat().st_size / (1024 * 1024) if db_path.exists() else 0.0
+    db_path = Path(settings.memory.db_path)
+    if not db_path.is_absolute():
+        db_path = ROOT / db_path
+
+    db_size_mb = (
+        db_path.stat().st_size / (1024 * 1024)
+        if db_path.exists()
+        else 0.0
+    )
 
     return {
         "ram_percent": vm.percent,
@@ -246,7 +262,9 @@ def system_stats() -> dict[str, object]:
         "disk_used_gb": round(disk.used / (1024**3), 2),
         "disk_total_gb": round(disk.total / (1024**3), 2),
         "memory_db_mb": round(db_size_mb, 2),
+        "memory_db_path": str(db_path),
         "model": settings.llm.model_path,
+        "model_exists": _model_path_exists(),
         "context_tokens": settings.llm.n_ctx,
         "web_port": WEB_PORT,
     }
