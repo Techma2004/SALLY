@@ -23,7 +23,7 @@ import {
 import "./App.css";
 
 const USER_KEY = "sally-web-user-id";
-const REFRESH_MS = 10000;
+const REFRESH_MS = 30000;
 
 function getUserId() {
   let id = localStorage.getItem(USER_KEY);
@@ -68,6 +68,36 @@ function formatRuntime(value) {
 
 function App() {
   const userId = useMemo(getUserId, []);
+
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        if ("serviceWorker" in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(
+            registrations.map((registration) => registration.unregister())
+          );
+        }
+
+        if ("caches" in window) {
+          const cacheNames = await window.caches.keys();
+          await Promise.all(cacheNames.map((name) => window.caches.delete(name)));
+        }
+      } catch {
+        // Legacy local service-worker cleanup is best effort.
+      }
+
+      if (active) {
+        window.setTimeout(() => window.location.reload(), 0);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
   const chatEndRef = useRef(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -279,6 +309,8 @@ function App() {
           content: data.answer,
           created_at: new Date().toISOString(),
           agent_name: data.agent_name,
+          route: data.route,
+          elapsed_ms: data.elapsed_ms,
         },
       ]);
 
@@ -562,10 +594,16 @@ function App() {
 
                           <div className="message-meta">
                             <span>{formatTime(item.created_at)}</span>
-                            {item.agent_name && (
+                            {item.route && (
                               <>
                                 <span className="meta-separator">·</span>
-                                <span>{item.agent_name}</span>
+                                <span>{item.route}</span>
+                              </>
+                            )}
+                            {item.elapsed_ms != null && (
+                              <>
+                                <span className="meta-separator">·</span>
+                                <span>{item.elapsed_ms} ms</span>
                               </>
                             )}
                           </div>
@@ -816,7 +854,7 @@ function App() {
                 ],
                 [
                   "Web port",
-                  "8080",
+                  stats?.web_port ?? 5678,
                 ],
               ].map(([label, value]) => (
                 <article className="stat-card" key={label}>
