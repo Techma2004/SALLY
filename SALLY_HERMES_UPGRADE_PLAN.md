@@ -27,7 +27,7 @@ User
 - Hidden inference layer
 - Dynamic agent actions
 - Live system/runtime dashboard
-- Fixed local web port: 8080
+- Fixed local web port: 5678
 - TUI removed
 
 ## Next engineering priorities
