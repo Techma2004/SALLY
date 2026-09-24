@@ -7,11 +7,17 @@ from pathlib import Path
 
 from core.config import PROJECT_ROOT, settings
 
-from .models import Memory, MemoryType, UserModelEntry
+from .models import (
+    Conversation,
+    ConversationMessage,
+    Memory,
+    MemoryType,
+    UserModelEntry,
+)
 
 
 class MemoryStore:
-    """Low-level SQLite storage for SALLY memory."""
+    """Low-level SQLite storage for SALLY memory and conversations."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         path = Path(db_path or settings.memory.db_path)
@@ -30,6 +36,7 @@ class MemoryStore:
             timeout=10,
         )
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
         connection.execute("PRAGMA journal_mode=WAL")
         return connection
@@ -96,6 +103,31 @@ class MemoryStore:
                     last_used TEXT,
                     examples TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(conversation_id)
+                        REFERENCES conversations(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
+                ON conversations(user_id, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
+                ON conversation_messages(conversation_id, id);
                 """
             )
 
@@ -155,8 +187,6 @@ class MemoryStore:
 
         limit = max(1, min(limit, 50))
 
-        # Build a tolerant FTS query from individual words.
-        # Prefix matching lets "interface" match "interfaces".
         terms = [
             term.strip('.,!?;:"\'()[]{}')
             for term in query.split()
@@ -237,6 +267,163 @@ class MemoryStore:
             for row in rows
         ]
 
+    def create_conversation(
+        self,
+        user_id: str,
+        *,
+        title: str = "New Conversation",
+    ) -> Conversation:
+        conversation_id = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+
+        clean_user_id = user_id.strip() or "anonymous"
+        clean_title = title.strip() or "New Conversation"
+        clean_title = clean_title[:120]
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO conversations
+                    (id, user_id, title, created_at, updated_at)
+                VALUES
+                    (?, ?, ?, ?, ?)
+                """,
+                (
+                    conversation_id,
+                    clean_user_id,
+                    clean_title,
+                    now,
+                    now,
+                ),
+            )
+
+        return Conversation(
+            id=conversation_id,
+            user_id=clean_user_id,
+            title=clean_title,
+            created_at=self._parse_datetime(now),
+            updated_at=self._parse_datetime(now),
+        )
+
+    def get_conversation(
+        self,
+        conversation_id: str,
+        user_id: str,
+    ) -> Conversation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, user_id, title, created_at, updated_at
+                FROM conversations
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    conversation_id,
+                    user_id,
+                ),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return self._conversation_from_row(row)
+
+    def recent_conversations(
+        self,
+        user_id: str,
+        limit: int = 20,
+    ) -> list[Conversation]:
+        limit = max(1, min(limit, 100))
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, user_id, title, created_at, updated_at
+                FROM conversations
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (
+                    user_id,
+                    limit,
+                ),
+            ).fetchall()
+
+        return [self._conversation_from_row(row) for row in rows]
+
+    def add_conversation_message(
+        self,
+        conversation_id: str,
+        *,
+        role: str,
+        content: str,
+    ) -> ConversationMessage:
+        clean_role = role.strip().lower()
+        clean_content = content.strip()
+
+        if clean_role not in {"user", "assistant", "system"}:
+            raise ValueError("Unsupported conversation message role.")
+
+        if not clean_content:
+            raise ValueError("Conversation message cannot be empty.")
+
+        created_at = datetime.now(timezone.utc)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO conversation_messages
+                    (conversation_id, role, content, created_at)
+                VALUES
+                    (?, ?, ?, ?)
+                """,
+                (
+                    conversation_id,
+                    clean_role,
+                    clean_content,
+                    created_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE conversations
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    created_at.isoformat(),
+                    conversation_id,
+                ),
+            )
+
+            message_id = int(cursor.lastrowid)
+
+        return ConversationMessage(
+            id=message_id,
+            conversation_id=conversation_id,
+            role=clean_role,
+            content=clean_content,
+            created_at=created_at,
+        )
+
+    def conversation_messages(
+        self,
+        conversation_id: str,
+    ) -> list[ConversationMessage]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, conversation_id, role, content, created_at
+                FROM conversation_messages
+                WHERE conversation_id = ?
+                ORDER BY id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+
+        return [self._conversation_message_from_row(row) for row in rows]
+
     @staticmethod
     def _memory_from_row(row: sqlite3.Row) -> Memory:
         try:
@@ -249,6 +436,28 @@ class MemoryStore:
             content=row["content"],
             memory_type=memory_type,
             importance=float(row["importance"] or 0.5),
+            created_at=MemoryStore._parse_datetime(row["created_at"]),
+        )
+
+    @staticmethod
+    def _conversation_from_row(row: sqlite3.Row) -> Conversation:
+        return Conversation(
+            id=row["id"],
+            user_id=row["user_id"],
+            title=row["title"],
+            created_at=MemoryStore._parse_datetime(row["created_at"]),
+            updated_at=MemoryStore._parse_datetime(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _conversation_message_from_row(
+        row: sqlite3.Row,
+    ) -> ConversationMessage:
+        return ConversationMessage(
+            id=int(row["id"]),
+            conversation_id=row["conversation_id"],
+            role=row["role"],
+            content=row["content"],
             created_at=MemoryStore._parse_datetime(row["created_at"]),
         )
 
