@@ -5,8 +5,6 @@ import argparse
 from core.config import settings
 
 
-WEB_PORT = 5678
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -28,7 +26,7 @@ def main() -> None:
         uvicorn.run(
             "core.gateway.web:app",
             host=settings.server.host,
-            port=WEB_PORT,
+            port=settings.server.port,
             reload=False,
         )
         return
