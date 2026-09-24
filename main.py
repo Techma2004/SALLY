@@ -5,7 +5,7 @@ import argparse
 from core.config import settings
 
 
-WEB_PORT = 8080
+WEB_PORT = 5678
 
 
 def main() -> None:
