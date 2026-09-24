@@ -135,18 +135,18 @@ def load_user() -> dict:
         if human_path.exists():
             data = json.loads(human_path.read_text(encoding="utf-8"))
             return {
-                "user_name": data.get("user_name") or data.get("name") or "Edima",
-                "user_handle": data.get("user_handle") or "Edima",
-                "user_location": data.get("user_location") or "Calabar, NG",
+                "user_name": data.get("user_name") or data.get("name") or "User",
+                "user_handle": data.get("user_handle") or "User",
+                "user_location": data.get("user_location") or "Unknown",
                 "raw": data,
             }
     except (OSError, json.JSONDecodeError):
         pass
 
     return {
-        "user_name": "Edima",
-        "user_handle": "Edima",
-        "user_location": "Calabar, NG",
+        "user_name": "User",
+        "user_handle": "User",
+        "user_location": "Unknown",
         "raw": {},
     }
 
