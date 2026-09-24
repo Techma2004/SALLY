@@ -504,8 +504,7 @@ To create a local profile manually, add a gitignored `memory/core/human.json` wi
 ## Author
 
 **Edima Bassey** - Independent Developer, AI Enthusiast
-- Location: Calabar, Cross River State, Nigeria
-- Focus: Offline AI, Linux Systems, Android, Robotics
+
 - Project: SALLY - Personal AI Assistant
 
 Built with a focus on privacy, modularity, portability, and offline-first capability.
