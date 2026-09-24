@@ -1,25 +1,46 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bot, Brain, Check, ChevronDown, Code2, Copy, Database,
-  FileText, Globe, Home, Menu, MessageSquare, MoreVertical, Plus,
-  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Terminal,
-  ThumbsDown, ThumbsUp, Trash2, Wrench, X
+  Activity,
+  Bot,
+  Brain,
+  Check,
+  ChevronDown,
+  Code2,
+  Copy,
+  Database,
+  Menu,
+  MessageSquare,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Terminal,
+  Wrench,
+  X,
 } from "lucide-react";
 import "./App.css";
 
 const USER_KEY = "sally-web-user-id";
+const REFRESH_MS = 10000;
 
 function getUserId() {
   let id = localStorage.getItem(USER_KEY);
+
   if (!id) {
-    id = globalThis.crypto?.randomUUID?.() || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    id =
+      globalThis.crypto?.randomUUID?.() ||
+      `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(USER_KEY, id);
   }
+
   return id;
 }
 
 function formatTime(value) {
   if (!value) return "";
+
   return new Date(value).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
@@ -28,14 +49,27 @@ function formatTime(value) {
 
 function formatDate(value) {
   if (!value) return "";
+
   return new Date(value).toLocaleString([], {
     dateStyle: "medium",
     timeStyle: "short",
   });
 }
 
+function shortModel(path) {
+  if (!path) return "Unknown model";
+  return path.split("/").pop();
+}
+
+function formatRuntime(value) {
+  if (value == null) return "—";
+  return String(value);
+}
+
 function App() {
   const userId = useMemo(getUserId, []);
+  const chatEndRef = useRef(null);
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [view, setView] = useState("chat");
   const [conversationId, setConversationId] = useState(null);
@@ -45,40 +79,17 @@ function App() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [health, setHealth] = useState(null);
   const [stats, setStats] = useState(null);
   const [tools, setTools] = useState([]);
   const [memories, setMemories] = useState([]);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [copiedId, setCopiedId] = useState(null);
 
-  const loadConversations = async () => {
-    const response = await fetch(`/conversations?user_id=${encodeURIComponent(userId)}`);
-    if (!response.ok) throw new Error("Could not load conversations.");
-    const data = await response.json();
-    setConversations(data.conversations || []);
-  };
-
-  const loadConversation = async (id) => {
-    const response = await fetch(
-      `/conversations/${encodeURIComponent(id)}?user_id=${encodeURIComponent(userId)}`
-    );
-    if (!response.ok) throw new Error("Could not load conversation.");
-    const data = await response.json();
-    setConversationId(data.conversation.id);
-    setConversationTitle(data.conversation.title);
-    setMessages(data.messages || []);
-    setView("chat");
-    setSidebarOpen(false);
-  };
-
-  const newConversation = () => {
-    setConversationId(null);
-    setConversationTitle("New Conversation");
-    setMessages([]);
-    setMessage("");
-    setError("");
-    setView("chat");
-    setSidebarOpen(false);
+  const loadHealth = async () => {
+    const response = await fetch("/health");
+    if (!response.ok) throw new Error("SALLY gateway health check failed.");
+    setHealth(await response.json());
   };
 
   const loadSystem = async () => {
@@ -94,29 +105,135 @@ function App() {
     setTools(data.tools || []);
   };
 
+  const loadConversations = async () => {
+    const response = await fetch(
+      `/conversations?user_id=${encodeURIComponent(userId)}`
+    );
+
+    if (!response.ok) throw new Error("Could not load conversations.");
+
+    const data = await response.json();
+    const next = data.conversations || [];
+    setConversations(next);
+    return next;
+  };
+
+  const loadConversation = async (id) => {
+    const response = await fetch(
+      `/conversations/${encodeURIComponent(id)}?user_id=${encodeURIComponent(
+        userId
+      )}`
+    );
+
+    if (!response.ok) throw new Error("Could not load conversation.");
+
+    const data = await response.json();
+
+    setConversationId(data.conversation.id);
+    setConversationTitle(data.conversation.title);
+    setMessages(data.messages || []);
+    setView("chat");
+    setSidebarOpen(false);
+    setError("");
+  };
+
   const loadMemories = async () => {
     const endpoint = memoryQuery.trim()
-      ? `/memory?q=${encodeURIComponent(memoryQuery.trim())}&limit=50`
+      ? `/memory?q=${encodeURIComponent(
+          memoryQuery.trim()
+        )}&limit=50`
       : "/memory/recent?limit=50";
+
     const response = await fetch(endpoint);
+
     if (!response.ok) throw new Error("Could not load memory.");
+
     const data = await response.json();
     setMemories(data.results || []);
   };
 
+  const loadEverything = async () => {
+    try {
+      await Promise.all([
+        loadHealth(),
+        loadSystem(),
+        loadTools(),
+        loadConversations(),
+        loadMemories(),
+      ]);
+      setError("");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const newConversation = () => {
+    setConversationId(null);
+    setConversationTitle("New Conversation");
+    setMessages([]);
+    setMessage("");
+    setError("");
+    setView("chat");
+    setSidebarOpen(false);
+  };
+
   useEffect(() => {
-    Promise.all([loadConversations(), loadSystem(), loadTools(), loadMemories()])
-      .catch((err) => setError(err.message));
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const [nextConversations] = await Promise.all([
+          loadConversations(),
+          loadHealth(),
+          loadSystem(),
+          loadTools(),
+          loadMemories(),
+        ]);
+
+        if (!cancelled && nextConversations[0]) {
+          await loadConversation(nextConversations[0].id);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      }
+    })();
+
+    const timer = window.setInterval(() => {
+      Promise.all([loadHealth(), loadSystem()])
+        .catch((err) => setError(err.message));
+    }, REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
-    if (view === "system") loadSystem().catch((err) => setError(err.message));
-    if (view === "tools") loadTools().catch((err) => setError(err.message));
-    if (view === "memory") loadMemories().catch((err) => setError(err.message));
+    chatEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [messages, busy]);
+
+  useEffect(() => {
+    if (view === "memory") {
+      loadMemories().catch((err) => setError(err.message));
+    }
+
+    if (view === "tools") {
+      loadTools().catch((err) => setError(err.message));
+    }
+
+    if (view === "system") {
+      Promise.all([loadHealth(), loadSystem()])
+        .catch((err) => setError(err.message));
+    }
   }, [view]);
 
-  const sendMessage = async () => {
-    const text = message.trim();
+  const sendMessage = async (prefilled) => {
+    const text = (prefilled ?? message).trim();
+
     if (!text || busy) return;
 
     const optimistic = {
@@ -134,7 +251,9 @@ function App() {
     try {
       const response = await fetch("/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           message: text,
           user_id: userId,
@@ -144,7 +263,12 @@ function App() {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "SALLY could not process the request.");
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "SALLY could not process the request."
+        );
+      }
 
       setConversationId(data.conversation_id);
       setMessages((current) => [
@@ -157,6 +281,7 @@ function App() {
           agent_name: data.agent_name,
         },
       ]);
+
       await loadConversations();
 
       if (!conversationId) {
@@ -164,7 +289,9 @@ function App() {
       }
     } catch (err) {
       setError(err.message);
-      setMessages((current) => current.filter((item) => item.id !== optimistic.id));
+      setMessages((current) =>
+        current.filter((item) => item.id !== optimistic.id)
+      );
     } finally {
       setBusy(false);
     }
@@ -174,59 +301,109 @@ function App() {
     try {
       await navigator.clipboard.writeText(item.content);
       setCopiedId(item.id);
-      setTimeout(() => setCopiedId(null), 1400);
+
+      window.setTimeout(() => {
+        setCopiedId((current) => (current === item.id ? null : current));
+      }, 1400);
     } catch {
       setError("Clipboard access is unavailable.");
     }
   };
 
-  const nav = [
+  const navItems = [
     ["chat", MessageSquare, "Conversations"],
     ["memory", Brain, "Memory"],
     ["tools", Wrench, "Tools"],
     ["system", Activity, "System"],
   ];
 
+  const connectionLabel =
+    health?.status === "ok" ? "Local gateway" : "Connecting…";
+
   return (
-    <div className="app">
-      {sidebarOpen && <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />}
+    <div className="app-shell">
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
+
+      {sidebarOpen && (
+        <div
+          className="mobile-overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-header">
+        <div className="sidebar-top">
           <div className="brand">
-            <div className="sally-logo"><Bot size={27} /></div>
-            <div><h1>SALLY</h1><span>Personal AI</span></div>
+            <div className="sally-mark">
+              <Bot size={25} strokeWidth={1.8} />
+            </div>
+
+            <div>
+              <div className="brand-name">SALLY</div>
+              <div className="brand-subtitle">Personal AI</div>
+            </div>
           </div>
-          <button className="mobile-close" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
+
+          <button
+            className="icon-button mobile-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close navigation"
+          >
+            <X size={19} />
+          </button>
         </div>
 
-        <button className="new-chat" onClick={newConversation}>
-          <Plus size={18} /> <span>New Conversation</span>
+        <button className="new-chat-button" onClick={newConversation}>
+          <span className="new-chat-icon">
+            <Plus size={17} />
+          </span>
+          <span>New conversation</span>
         </button>
 
         <nav className="navigation">
-          {nav.map(([key, Icon, label]) => (
+          <div className="navigation-label">WORKSPACE</div>
+
+          {navItems.map(([key, Icon, label]) => (
             <button
               key={key}
               className={`nav-item ${view === key ? "active" : ""}`}
-              onClick={() => { setView(key); setSidebarOpen(false); }}
+              onClick={() => {
+                setView(key);
+                setSidebarOpen(false);
+              }}
             >
-              <Icon size={19} /><span>{label}</span>
+              <Icon size={18} strokeWidth={1.8} />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
 
         <div className="recent-section">
-          <div className="section-title">RECENT CONVERSATIONS</div>
+          <div className="section-heading">
+            <span>RECENT</span>
+            <span className="section-count">
+              {conversations.length}
+            </span>
+          </div>
+
           <div className="recent-list">
             {conversations.length === 0 ? (
-              <p className="empty-small">No conversations yet.</p>
+              <div className="empty-sidebar">
+                Your conversations will appear here.
+              </div>
             ) : (
               conversations.map((conversation) => (
                 <button
-                  className={`recent-chat ${conversation.id === conversationId ? "selected" : ""}`}
                   key={conversation.id}
-                  onClick={() => loadConversation(conversation.id).catch((err) => setError(err.message))}
+                  className={`conversation-item ${
+                    conversation.id === conversationId ? "selected" : ""
+                  }`}
+                  onClick={() =>
+                    loadConversation(conversation.id).catch((err) =>
+                      setError(err.message)
+                    )
+                  }
                 >
                   <span>{conversation.title}</span>
                   <small>{formatDate(conversation.updated_at)}</small>
@@ -236,84 +413,218 @@ function App() {
           </div>
         </div>
 
-        <div className="profile">
-          <div className="profile-avatar"><Terminal size={18} /></div>
-          <div className="profile-info"><strong>Local Browser</strong><span>Private session</span></div>
-          <ShieldCheck size={17} />
+        <div className="sidebar-footer">
+          <div className="privacy-card">
+            <div className="privacy-icon">
+              <ShieldCheck size={17} />
+            </div>
+
+            <div>
+              <strong>Local & private</strong>
+              <span>Your browser connects to SALLY on this machine.</span>
+            </div>
+          </div>
+
+          <div className="session-line">
+            <div className="session-avatar">
+              <Terminal size={15} />
+            </div>
+
+            <div className="session-copy">
+              <strong>Browser session</strong>
+              <span>{userId.slice(0, 12)}…</span>
+            </div>
+          </div>
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main-panel">
         <header className="topbar">
-          <button className="mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button>
-          <button className="conversation-title" onClick={() => setView("chat")}>
-            <span>{conversationTitle}</span><ChevronDown size={16} />
+          <button
+            className="icon-button mobile-menu"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open navigation"
+          >
+            <Menu size={21} />
           </button>
-          <div className="top-actions">
-            <button title="Refresh data" onClick={() => {
-              Promise.all([loadConversations(), loadSystem(), loadTools(), loadMemories()])
-                .catch((err) => setError(err.message));
-            }}><RefreshCw size={18} /></button>
-            <button title="New conversation" onClick={newConversation}><Plus size={19} /></button>
+
+          <div className="topbar-center">
+            <button
+              className="conversation-heading"
+              onClick={() => setView("chat")}
+              title="Return to conversation"
+            >
+              <span>{conversationTitle}</span>
+              <ChevronDown size={15} />
+            </button>
+
+            <div className="status-pill">
+              <span className="status-dot" />
+              <span>{connectionLabel}</span>
+            </div>
+          </div>
+
+          <div className="topbar-actions">
+            <button
+              className="icon-button"
+              onClick={loadEverything}
+              title="Refresh SALLY"
+              aria-label="Refresh SALLY"
+            >
+              <RefreshCw size={17} />
+            </button>
+
+            <button
+              className="icon-button accent-icon-button"
+              onClick={newConversation}
+              title="New conversation"
+              aria-label="New conversation"
+            >
+              <Plus size={18} />
+            </button>
           </div>
         </header>
 
         {error && (
-          <div className="error-banner">
-            <span>{error}</span><button onClick={() => setError("")}><X size={15} /></button>
+          <div className="error-banner" role="alert">
+            <span>{error}</span>
+            <button
+              className="error-close"
+              onClick={() => setError("")}
+              aria-label="Dismiss error"
+            >
+              <X size={15} />
+            </button>
           </div>
         )}
 
         {view === "chat" && (
-          <>
-            <section className="chat-container">
-              <div className="messages">
+          <section className="chat-view">
+            <div className="chat-scroll">
+              <div className="message-column">
                 {messages.length === 0 ? (
-                  <div className="empty-chat">
-                    <div className="empty-logo"><Bot size={34} /></div>
-                    <h2>Start a conversation</h2>
-                    <p>This is the real SALLY gateway. Nothing is preloaded here.</p>
+                  <div className="welcome-state">
+                    <div className="welcome-mark">
+                      <div className="welcome-orbit" />
+                      <Bot size={38} strokeWidth={1.6} />
+                    </div>
+
+                    <div className="welcome-kicker">
+                      Science · Artificial · Learning · Logic · You
+                    </div>
+
+                    <h1>How can SALLY help?</h1>
+                    <p>
+                      A local-first AI workspace for conversations,
+                      reasoning, tools, and persistent memory.
+                    </p>
+
+                    <div className="starter-grid">
+                      {[
+                        "Explain how your memory works",
+                        "Calculate 25 × 40",
+                        "Show me the tools you currently have",
+                      ].map((prompt) => (
+                        <button
+                          key={prompt}
+                          className="starter-card"
+                          onClick={() => sendMessage(prompt)}
+                        >
+                          <Sparkles size={16} />
+                          <span>{prompt}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   messages.map((item) => (
-                    <div key={item.id} className={`message-row ${item.role === "user" ? "user" : "assistant"}`}>
-                      {item.role !== "user" && <div className="message-avatar"><Bot size={20} /></div>}
-                      <div className="message-content">
-                        <div className={`message-bubble ${item.role === "user" ? "user-bubble" : ""}`}>
-                          <div className="message-text">{item.content}</div>
-                          <div className="message-time">
-                            {formatTime(item.created_at)}
-                            {item.agent_name && <span>· {item.agent_name}</span>}
+                    <div
+                      key={item.id}
+                      className={`message-row ${
+                        item.role === "user" ? "user" : "assistant"
+                      }`}
+                    >
+                      {item.role !== "user" && (
+                        <div className="message-avatar">
+                          <Bot size={18} strokeWidth={1.7} />
+                        </div>
+                      )}
+
+                      <div className="message-stack">
+                        <div
+                          className={`message-bubble ${
+                            item.role === "user" ? "user-bubble" : ""
+                          }`}
+                        >
+                          <div className="message-text">
+                            {item.content}
+                          </div>
+
+                          <div className="message-meta">
+                            <span>{formatTime(item.created_at)}</span>
+                            {item.agent_name && (
+                              <>
+                                <span className="meta-separator">·</span>
+                                <span>{item.agent_name}</span>
+                              </>
+                            )}
                           </div>
                         </div>
+
                         {item.role === "assistant" && (
-                          <div className="message-controls">
-                            <button onClick={() => copyMessage(item)} title="Copy">
-                              {copiedId === item.id ? <Check size={15} /> : <Copy size={15} />}
+                          <div className="message-tools">
+                            <button
+                              onClick={() => copyMessage(item)}
+                              className="message-tool"
+                              title="Copy response"
+                            >
+                              {copiedId === item.id ? (
+                                <>
+                                  <Check size={14} />
+                                  <span>Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={14} />
+                                  <span>Copy</span>
+                                </>
+                              )}
                             </button>
-                            <button title="Helpful"><ThumbsUp size={15} /></button>
-                            <button title="Not helpful"><ThumbsDown size={15} /></button>
                           </div>
                         )}
                       </div>
                     </div>
                   ))
                 )}
+
                 {busy && (
                   <div className="message-row assistant">
-                    <div className="message-avatar"><Bot size={20} /></div>
-                    <div className="message-content">
-                      <div className="message-bubble"><span className="typing">SALLY is thinking…</span></div>
+                    <div className="message-avatar">
+                      <Bot size={18} strokeWidth={1.7} />
+                    </div>
+
+                    <div className="message-stack">
+                      <div className="message-bubble thinking-bubble">
+                        <div className="thinking-indicator">
+                          <span />
+                          <span />
+                          <span />
+                          <em>SALLY is thinking</em>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
-              </div>
-            </section>
 
-            <div className="composer-wrapper">
-              <div className="composer">
+                <div ref={chatEndRef} />
+              </div>
+            </div>
+
+            <div className="composer-zone">
+              <div className="composer-shell">
                 <textarea
                   value={message}
+                  disabled={busy}
                   onChange={(event) => setMessage(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
@@ -322,49 +633,137 @@ function App() {
                     }
                   }}
                   placeholder="Message SALLY…"
-                  rows={2}
-                  disabled={busy}
+                  rows={1}
+                  aria-label="Message SALLY"
                 />
-                <div className="composer-bottom">
-                  <div className="composer-tools">
-                    <span className="composer-status"><span /> Local gateway</span>
+
+                <div className="composer-footer">
+                  <div className="composer-note">
+                    <span className="composer-live-dot" />
+                    <span>{connectionLabel}</span>
+                    <span className="composer-divider">·</span>
+                    <span>Enter to send</span>
+                    <span className="composer-divider">·</span>
+                    <span>Shift + Enter for a new line</span>
                   </div>
-                  <button className="send-button" onClick={sendMessage} disabled={!message.trim() || busy}>
+
+                  <button
+                    className="send-button"
+                    onClick={() => sendMessage()}
+                    disabled={!message.trim() || busy}
+                    aria-label="Send message"
+                  >
                     <Send size={17} />
                   </button>
                 </div>
               </div>
-              <p className="disclaimer">SALLY runs through your local gateway. Verify important information.</p>
+
+              <div className="composer-disclaimer">
+                SALLY can make mistakes. Verify important information.
+              </div>
             </div>
-          </>
+          </section>
         )}
 
         {view === "memory" && (
           <section className="dashboard-view">
-            <div className="view-heading"><div><span className="eyebrow">PERSISTENT MEMORY</span><h2>Memory</h2><p>Stored memories from SALLY's SQLite memory store.</p></div><button className="secondary-button" onClick={() => loadMemories().catch((err) => setError(err.message))}><RefreshCw size={16} /> Refresh</button></div>
-            <form className="search-box" onSubmit={(event) => { event.preventDefault(); loadMemories().catch((err) => setError(err.message)); }}>
-              <Search size={17} /><input value={memoryQuery} onChange={(event) => setMemoryQuery(event.target.value)} placeholder="Search memory…" /><button type="submit">Search</button>
+            <div className="view-header">
+              <div>
+                <span className="eyebrow">PERSISTENT MEMORY</span>
+                <h2>Memory</h2>
+                <p>
+                  Direct access to the SQLite memory store used by SALLY.
+                </p>
+              </div>
+
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  loadMemories().catch((err) => setError(err.message))
+                }
+              >
+                <RefreshCw size={15} />
+                Refresh
+              </button>
+            </div>
+
+            <form
+              className="search-box"
+              onSubmit={(event) => {
+                event.preventDefault();
+                loadMemories().catch((err) => setError(err.message));
+              }}
+            >
+              <Search size={17} />
+              <input
+                value={memoryQuery}
+                onChange={(event) => setMemoryQuery(event.target.value)}
+                placeholder="Search memory…"
+              />
+              <button type="submit">Search</button>
             </form>
+
             <div className="data-list">
-              {memories.length === 0 ? <div className="empty-state">No memories found.</div> : memories.map((memory) => (
-                <article className="data-card" key={memory.id}>
-                  <div className="data-card-top"><span className="badge">{memory.type}</span><span>{formatDate(memory.created_at)}</span></div>
-                  <p>{memory.content}</p>
-                  <small>Importance {Math.round(memory.importance * 100)}%</small>
-                </article>
-              ))}
+              {memories.length === 0 ? (
+                <div className="empty-state">
+                  <Brain size={22} />
+                  <strong>No matching memories</strong>
+                  <span>SALLY has nothing to show for this query yet.</span>
+                </div>
+              ) : (
+                memories.map((memory) => (
+                  <article className="data-card" key={memory.id}>
+                    <div className="data-card-top">
+                      <span className="badge">{memory.type}</span>
+                      <span>{formatDate(memory.created_at)}</span>
+                    </div>
+
+                    <p>{memory.content}</p>
+
+                    <div className="data-card-bottom">
+                      <span>Importance</span>
+                      <strong>{Math.round(memory.importance * 100)}%</strong>
+                    </div>
+                  </article>
+                ))
+              )}
             </div>
           </section>
         )}
 
         {view === "tools" && (
           <section className="dashboard-view">
-            <div className="view-heading"><div><span className="eyebrow">RUNTIME</span><h2>Tools</h2><p>Tools actually registered with the current SALLY runtime.</p></div></div>
+            <div className="view-header">
+              <div>
+                <span className="eyebrow">RUNTIME CAPABILITIES</span>
+                <h2>Tools</h2>
+                <p>
+                  Tools registered by the current SALLY runtime.
+                </p>
+              </div>
+            </div>
+
             <div className="tool-grid">
               {tools.map((tool) => (
                 <article className="tool-card" key={tool.name}>
-                  <div className="tool-icon"><Wrench size={18} /></div>
-                  <div><h3>{tool.name}</h3><p>{tool.description}</p><span className="tool-meta">{tool.requires_inference ? "LLM explanation" : "Deterministic"} · {tool.safety}</span></div>
+                  <div className="tool-icon">
+                    <Wrench size={17} />
+                  </div>
+
+                  <div>
+                    <div className="tool-title-row">
+                      <h3>{tool.name}</h3>
+                      <span>{tool.safety}</span>
+                    </div>
+
+                    <p>{tool.description}</p>
+
+                    <small>
+                      {tool.requires_inference
+                        ? "Verified result + model explanation"
+                        : "Deterministic execution"}
+                    </small>
+                  </div>
                 </article>
               ))}
             </div>
@@ -373,51 +772,181 @@ function App() {
 
         {view === "system" && (
           <section className="dashboard-view">
-            <div className="view-heading"><div><span className="eyebrow">LIVE RUNTIME</span><h2>System</h2><p>Current machine and SALLY runtime information.</p></div><button className="secondary-button" onClick={() => loadSystem().catch((err) => setError(err.message))}><RefreshCw size={16} /> Refresh</button></div>
+            <div className="view-header">
+              <div>
+                <span className="eyebrow">LIVE RUNTIME</span>
+                <h2>System</h2>
+                <p>
+                  Live information from the machine running SALLY.
+                </p>
+              </div>
+
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  Promise.all([loadHealth(), loadSystem()])
+                    .catch((err) => setError(err.message))
+                }
+              >
+                <RefreshCw size={15} />
+                Refresh
+              </button>
+            </div>
+
             <div className="stats-grid">
               {[
                 ["CPU", stats ? `${stats.cpu_percent}%` : "—"],
-                ["RAM", stats ? `${stats.ram_used_gb} / ${stats.ram_total_gb} GB` : "—"],
-                ["Disk", stats ? `${stats.disk_percent}% used` : "—"],
-                ["Memory DB", stats ? `${stats.memory_db_mb} MB` : "—"],
-                ["Context", stats ? `${stats.context_tokens} tokens` : "—"],
-                ["Model", stats ? stats.model.split("/").pop() : "—"],
+                [
+                  "RAM",
+                  stats
+                    ? `${stats.ram_used_gb} / ${stats.ram_total_gb} GB`
+                    : "—",
+                ],
+                [
+                  "Disk",
+                  stats ? `${stats.disk_percent}% used` : "—",
+                ],
+                [
+                  "Memory DB",
+                  stats ? `${stats.memory_db_mb} MB` : "—",
+                ],
+                [
+                  "Context",
+                  stats ? `${stats.context_tokens} tokens` : "—",
+                ],
+                [
+                  "Web port",
+                  "8080",
+                ],
               ].map(([label, value]) => (
-                <article className="stat-card" key={label}><span>{label}</span><strong>{value}</strong></article>
+                <article className="stat-card" key={label}>
+                  <span>{label}</span>
+                  <strong>{formatRuntime(value)}</strong>
+                </article>
               ))}
             </div>
-            <div className="system-note"><Database size={19} /><div><strong>Local-first runtime</strong><p>SALLY's current web interface is connected directly to the local FastAPI gateway, SQLite memory store, registered tools, and local LLM configuration.</p></div></div>
+
+            <div className="runtime-card">
+              <div className="runtime-card-icon">
+                <Database size={19} />
+              </div>
+
+              <div>
+                <span className="eyebrow">MODEL</span>
+                <h3>{shortModel(stats?.model)}</h3>
+                <p>
+                  SALLY v{health?.version ?? "—"} · Local gateway ·
+                  {stats?.context_tokens ?? "—"} context tokens
+                </p>
+              </div>
+
+              <div className="runtime-health">
+                <span className="status-dot" />
+                <span>{health?.status === "ok" ? "Healthy" : "Checking"}</span>
+              </div>
+            </div>
           </section>
         )}
       </main>
 
-      <aside className="info-panel">
-        <div className="sally-profile">
-          <div className="large-logo"><Bot size={36} /></div>
-          <div><h2>SALLY</h2><p>Science Artificial Learning Logic And You</p><div className="online"><span /> Local gateway</div></div>
-        </div>
-        <div className="panel-divider" />
-        <section className="panel-section">
-          <label>RUNTIME</label>
-          <div className="runtime-row"><Activity size={17} /><span>{stats ? "Gateway online" : "Loading status…"}</span></div>
-          <div className="runtime-row"><Database size={17} /><span>{stats ? `${stats.memory_db_mb} MB memory DB` : "—"}</span></div>
-        </section>
-        <div className="panel-divider" />
-        <section className="panel-section">
-          <label>ACTIVE TOOLS</label>
-          {tools.slice(0, 6).map((tool) => (
-            <div className="capability" key={tool.name}>
-              <div className="capability-icon"><Code2 size={17} /></div>
-              <div><strong>{tool.name}</strong><p>{tool.description}</p></div>
+      <aside className="right-panel">
+        <div className="right-panel-inner">
+          <div className="identity-block">
+            <div className="identity-mark">
+              <Bot size={29} strokeWidth={1.6} />
             </div>
-          ))}
-          {tools.length === 0 && <p>No tool data available.</p>}
-        </section>
-        <div className="panel-divider" />
-        <section className="panel-section">
-          <label>SESSION</label>
-          <p>{conversations.length} persisted conversation{conversations.length === 1 ? "" : "s"} in this browser session.</p>
-        </section>
+
+            <div>
+              <div className="identity-name">SALLY</div>
+              <div className="identity-description">
+                Science Artificial Learning Logic And You
+              </div>
+            </div>
+          </div>
+
+          <div className="panel-section-block">
+            <div className="panel-label">
+              <span>LIVE RUNTIME</span>
+              <span className="panel-live">
+                <span className="status-dot" />
+                {connectionLabel}
+              </span>
+            </div>
+
+            <div className="metric-list">
+              <div className="metric-row">
+                <div className="metric-icon"><Activity size={15} /></div>
+                <div>
+                  <span>Gateway</span>
+                  <strong>{health?.status === "ok" ? "Ready" : "Checking"}</strong>
+                </div>
+              </div>
+
+              <div className="metric-row">
+                <div className="metric-icon"><Database size={15} /></div>
+                <div>
+                  <span>Memory</span>
+                  <strong>{stats ? `${stats.memory_db_mb} MB` : "—"}</strong>
+                </div>
+              </div>
+
+              <div className="metric-row">
+                <div className="metric-icon"><Terminal size={15} /></div>
+                <div>
+                  <span>Model</span>
+                  <strong>{shortModel(stats?.model)}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="panel-section-block">
+            <div className="panel-label">
+              <span>ACTIVE TOOLS</span>
+              <span className="panel-count">{tools.length}</span>
+            </div>
+
+            <div className="tool-list">
+              {tools.slice(0, 6).map((tool) => (
+                <div className="mini-tool" key={tool.name}>
+                  <div className="mini-tool-icon">
+                    <Code2 size={15} />
+                  </div>
+
+                  <div>
+                    <strong>{tool.name}</strong>
+                    <span>{tool.requires_inference ? "Inference assisted" : "Deterministic"}</span>
+                  </div>
+                </div>
+              ))}
+
+              {tools.length === 0 && (
+                <div className="panel-empty">No tools reported.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="panel-section-block panel-session">
+            <div className="panel-label">
+              <span>SESSION</span>
+            </div>
+
+            <div className="session-stat">
+              <strong>{conversations.length}</strong>
+              <span>saved conversation{conversations.length === 1 ? "" : "s"}</span>
+            </div>
+
+            <div className="session-stat secondary">
+              <strong>{userId.slice(0, 12)}…</strong>
+              <span>browser identity</span>
+            </div>
+          </div>
+
+          <div className="right-panel-footer">
+            <Sparkles size={15} />
+            <span>Local-first · no demo data</span>
+          </div>
+        </div>
       </aside>
     </div>
   );
