@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import Memory, MemoryType, UserModelEntry
+from .models import Conversation, ConversationMessage, Memory, MemoryType, UserModelEntry
 from .store import MemoryStore
 
 
@@ -50,3 +50,46 @@ class MemoryManager:
     def profile(self) -> list[UserModelEntry]:
         """Return SALLY's structured user-model entries."""
         return self.store.get_user_model()
+
+
+    def create_conversation(
+        self,
+        user_id: str,
+        *,
+        title: str = "New Conversation",
+    ) -> Conversation:
+        return self.store.create_conversation(user_id, title=title)
+
+    def recent_conversations(
+        self,
+        user_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[Conversation]:
+        return self.store.recent_conversations(user_id, limit=limit)
+
+    def get_conversation(
+        self,
+        conversation_id: str,
+        user_id: str,
+    ) -> Conversation | None:
+        return self.store.get_conversation(conversation_id, user_id)
+
+    def add_conversation_message(
+        self,
+        conversation_id: str,
+        *,
+        role: str,
+        content: str,
+    ) -> ConversationMessage:
+        return self.store.add_conversation_message(
+            conversation_id,
+            role=role,
+            content=content,
+        )
+
+    def conversation_messages(
+        self,
+        conversation_id: str,
+    ) -> list[ConversationMessage]:
+        return self.store.conversation_messages(conversation_id)
