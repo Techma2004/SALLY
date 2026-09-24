@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import psutil
@@ -20,6 +21,7 @@ WEB_DIST = ROOT / "web" / "dist"
 
 gateway = Gateway()
 whatsapp_gateway = WhatsAppGateway(gateway)
+WEB_PORT = 5678
 
 app = FastAPI(
     title="SALLY Gateway",
@@ -55,6 +57,8 @@ class ChatResponse(BaseModel):
     agent_name: str
     source: str
     conversation_id: str
+    elapsed_ms: float
+    route: str
     error: str | None = None
 
 
@@ -112,6 +116,9 @@ def chat(request: ChatRequest) -> ChatResponse:
         content=request.message,
     )
 
+    started = time.perf_counter()
+    route = gateway.coordinator.describe_route(request.message)
+
     try:
         result = gateway.handle(
             request.message,
@@ -140,6 +147,8 @@ def chat(request: ChatRequest) -> ChatResponse:
         agent_name=result.agent_name,
         source=result.source,
         conversation_id=conversation.id,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+        route=route,
         error=result.error,
     )
 
@@ -232,13 +241,14 @@ def system_stats() -> dict[str, object]:
         "ram_percent": vm.percent,
         "ram_used_gb": round(vm.used / (1024**3), 2),
         "ram_total_gb": round(vm.total / (1024**3), 2),
-        "cpu_percent": psutil.cpu_percent(interval=0.2),
+        "cpu_percent": psutil.cpu_percent(interval=None),
         "disk_percent": disk.percent,
         "disk_used_gb": round(disk.used / (1024**3), 2),
         "disk_total_gb": round(disk.total / (1024**3), 2),
         "memory_db_mb": round(db_size_mb, 2),
         "model": settings.llm.model_path,
         "context_tokens": settings.llm.n_ctx,
+        "web_port": WEB_PORT,
     }
 
 
