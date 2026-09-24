@@ -15,7 +15,7 @@ Web workspace
 - ✅ Persistent browser conversations
 - ✅ Real memory, tools, system, and health views
 - ✅ Local-first runtime status
-- ✅ Fixed web port: 8080
+- ✅ Fixed web port: 5678
 - ✅ Responsive three-panel workspace
 - ✅ TUI removed
 
