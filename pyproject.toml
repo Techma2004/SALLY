@@ -17,8 +17,8 @@ dependencies = [
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["core", "core.gateway"]
+[tool.setuptools.packages.find]
+include = ["core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
