@@ -423,23 +423,21 @@ wheels = [
 
 [[package]]
 name = "sally"
-version = "0.2.0"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "httpx2" },
     { name = "llama-cpp-python" },
     { name = "psutil" },
-    { name = "pytest" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "rich" },
-    { name = "setuptools" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx2" },
     { name = "pytest" },
     { name = "setuptools" },
 ]
@@ -447,19 +445,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "httpx2" },
     { name = "llama-cpp-python", specifier = "==0.3.34" },
     { name = "psutil", specifier = ">=7.2.2" },
-    { name = "pytest", specifier = ">=9.1.1" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "rich", specifier = ">=15.0.0" },
-    { name = "setuptools", specifier = ">=75" },
     { name = "uvicorn", specifier = ">=0.53.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx2" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "setuptools", specifier = ">=75" },
 ]

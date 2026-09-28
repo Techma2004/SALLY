@@ -11,9 +11,6 @@ dependencies = [
     "requests>=2.34.2",
     "rich>=15.0.0",
     "uvicorn>=0.53.0",
-    "httpx2",
-    "pytest>=9.1.1",
-    "setuptools>=75",
 ]
 
 [build-system]
@@ -31,4 +28,5 @@ pythonpath = ["."]
 dev = [
     "pytest>=9.1.1",
     "setuptools>=75",
+    "httpx2",
 ]
