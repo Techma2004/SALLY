@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import psutil
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +13,10 @@ from pydantic import BaseModel, Field
 
 from core.config import PROJECT_ROOT, settings
 from core.gateway.gateway import Gateway
+from core.gateway.security import enforce_rate_limit, require_local_or_api_key
 from core.gateway.whatsapp import WhatsAppGateway
+
+_PROTECTED = [Depends(require_local_or_api_key), Depends(enforce_rate_limit)]
 
 
 ROOT = PROJECT_ROOT
@@ -90,7 +93,7 @@ def _message_dict(message) -> dict[str, object]:
     }
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, dependencies=_PROTECTED)
 def chat(request: ChatRequest) -> ChatResponse:
     user_id = _user_id(request.user_id)
     memory = gateway.coordinator.memory
@@ -153,7 +156,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     )
 
 
-@app.post("/conversations")
+@app.post("/conversations", dependencies=_PROTECTED)
 def create_conversation(
     user_id: str = "web",
     title: str = "New Conversation",
@@ -165,7 +168,7 @@ def create_conversation(
     return _conversation_dict(conversation)
 
 
-@app.get("/conversations")
+@app.get("/conversations", dependencies=_PROTECTED)
 def list_conversations(
     user_id: str = "web",
     limit: int = 20,
@@ -182,7 +185,7 @@ def list_conversations(
     }
 
 
-@app.get("/conversations/{conversation_id}")
+@app.get("/conversations/{conversation_id}", dependencies=_PROTECTED)
 def get_conversation(
     conversation_id: str,
     user_id: str = "web",
@@ -204,7 +207,7 @@ def get_conversation(
     }
 
 
-@app.get("/tools")
+@app.get("/tools", dependencies=_PROTECTED)
 def tools() -> dict[str, object]:
     registry = gateway.coordinator.runtime.tools
     return {
@@ -239,7 +242,7 @@ def health() -> dict[str, object]:
     }
 
 
-@app.get("/system/stats")
+@app.get("/system/stats", dependencies=_PROTECTED)
 def system_stats() -> dict[str, object]:
     vm = psutil.virtual_memory()
     disk = psutil.disk_usage(str(ROOT))
@@ -270,7 +273,7 @@ def system_stats() -> dict[str, object]:
     }
 
 
-@app.get("/memory")
+@app.get("/memory", dependencies=_PROTECTED)
 def memory_search(
     q: str,
     limit: int = 5,
@@ -299,7 +302,7 @@ def memory_search(
     }
 
 
-@app.get("/memory/recent")
+@app.get("/memory/recent", dependencies=_PROTECTED)
 def recent_memory(limit: int = 20) -> dict[str, object]:
     memories = gateway.coordinator.memory.recent(
         limit=max(1, min(limit, 100)),
@@ -362,11 +365,23 @@ if WEB_DIST.exists():
     def home() -> FileResponse:
         return FileResponse(WEB_DIST / "index.html")
 
+    _WEB_DIST_RESOLVED = WEB_DIST.resolve()
+
     @app.get("/{path:path}", response_class=HTMLResponse)
     def spa(path: str) -> FileResponse:
-        file_path = WEB_DIST / path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
+        candidate = (WEB_DIST / path).resolve()
+
+        # Reject anything that escapes the web/dist directory (path
+        # traversal via "..", absolute paths, symlink tricks, etc.)
+        # instead of trusting the client-supplied path.
+        is_contained = (
+            candidate == _WEB_DIST_RESOLVED
+            or _WEB_DIST_RESOLVED in candidate.parents
+        )
+
+        if is_contained and candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+
         return FileResponse(WEB_DIST / "index.html")
 else:
     @app.get("/", response_class=HTMLResponse)

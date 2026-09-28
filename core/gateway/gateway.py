@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.agent import Coordinator
 from core.agent.types import AgentStatus
+
+# Caps how many distinct user_ids we remember a "last result" for. user_id
+# is client-supplied and unauthenticated, so without a cap a caller could
+# grow this dict without bound by sending many unique user_ids (DoS via
+# memory exhaustion). Oldest entries are evicted first.
+_MAX_TRACKED_USERS = 5000
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,15 @@ class Gateway:
 
     def __init__(self, coordinator: Coordinator | None = None) -> None:
         self.coordinator = coordinator or Coordinator()
-        self._last_results: dict[str, str] = {}
+        self._last_results: OrderedDict[str, str] = OrderedDict()
+
+    def _remember_last_result(self, user_id: str, value: str) -> None:
+        if user_id in self._last_results:
+            self._last_results.move_to_end(user_id)
+        elif len(self._last_results) >= _MAX_TRACKED_USERS:
+            self._last_results.popitem(last=False)
+
+        self._last_results[user_id] = value
 
     def handle(
         self,
@@ -70,7 +85,7 @@ class Gateway:
         ):
             try:
                 float(result.output)
-                self._last_results[user_id] = result.output
+                self._remember_last_result(user_id, result.output)
             except (TypeError, ValueError):
                 pass
 
@@ -98,7 +113,7 @@ class Gateway:
         )
 
         if response.status is AgentStatus.COMPLETE:
-            self._last_results[user_id] = response.answer
+            self._remember_last_result(user_id, response.answer)
             return response.answer
 
         if response.error:

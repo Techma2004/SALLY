@@ -1,0 +1,504 @@
+diff --git a/.env.example b/.env.example
+index 81225e7..f714bb0 100644
+--- a/.env.example
++++ b/.env.example
+@@ -75,3 +75,11 @@ DEFAULT_CITY=Calabar
+ DEFAULT_COUNTRY=NG
+ 
+ TELEGRAM_BOT_TOKEN=
++
++# --- Security ---
++# Leave empty for local-only use: protected endpoints then accept loopback callers only.
++# Set to a long random value if SALLY must be reachable remotely (tunnel/reverse proxy).
++# Callers send it as "Authorization: Bearer <key>" or "X-API-Key: <key>".
++# Generate one with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
++SALLY_API_KEY=
++RATE_LIMIT_PER_MINUTE=60
+diff --git a/core/config.py b/core/config.py
+index 83c03a9..603792a 100644
+--- a/core/config.py
++++ b/core/config.py
+@@ -68,6 +68,8 @@ class MemorySettings:
+ class ServerSettings:
+     host: str
+     port: int
++    api_key: str
++    rate_limit_per_minute: int
+ 
+ 
+ @dataclass(frozen=True)
+@@ -76,6 +78,14 @@ class SallySettings:
+     version: str
+ 
+ 
++@dataclass(frozen=True)
++class IntegrationSettings:
++    openweather_api_key: str
++    news_api_key: str
++    default_city: str
++    default_country: str
++
++
+ @dataclass(frozen=True)
+ class Settings:
+     sally: SallySettings
+@@ -83,6 +93,7 @@ class Settings:
+     agent: AgentSettings
+     memory: MemorySettings
+     server: ServerSettings
++    integrations: IntegrationSettings
+ 
+ 
+ def get_settings() -> Settings:
+@@ -120,6 +131,19 @@ def get_settings() -> Settings:
+         server=ServerSettings(
+             host=_env("HOST", "127.0.0.1"),
+             port=_int("PORT", 5678),
++            # When unset, sensitive endpoints are restricted to loopback
++            # callers only (see core/gateway/security.py). Set this to a
++            # long random value if SALLY needs to be reachable remotely
++            # (e.g. for the WhatsApp webhook) and callers must present it
++            # via an `Authorization: Bearer <key>` or `X-API-Key` header.
++            api_key=_env("SALLY_API_KEY", ""),
++            rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 60),
++        ),
++        integrations=IntegrationSettings(
++            openweather_api_key=_env("OPENWEATHER_API_KEY", ""),
++            news_api_key=_env("NEWS_API_KEY", ""),
++            default_city=_env("DEFAULT_CITY", "Calabar"),
++            default_country=_env("DEFAULT_COUNTRY", "NG"),
+         ),
+     )
+ 
+diff --git a/core/gateway/gateway.py b/core/gateway/gateway.py
+index 6643beb..ee4c8f3 100644
+--- a/core/gateway/gateway.py
++++ b/core/gateway/gateway.py
+@@ -1,11 +1,18 @@
+ from __future__ import annotations
+ 
++from collections import OrderedDict
+ from dataclasses import dataclass, field
+ from typing import Any
+ 
+ from core.agent import Coordinator
+ from core.agent.types import AgentStatus
+ 
++# Caps how many distinct user_ids we remember a "last result" for. user_id
++# is client-supplied and unauthenticated, so without a cap a caller could
++# grow this dict without bound by sending many unique user_ids (DoS via
++# memory exhaustion). Oldest entries are evicted first.
++_MAX_TRACKED_USERS = 5000
++
+ 
+ @dataclass(frozen=True)
+ class GatewayRequest:
+@@ -36,7 +43,15 @@ class Gateway:
+ 
+     def __init__(self, coordinator: Coordinator | None = None) -> None:
+         self.coordinator = coordinator or Coordinator()
+-        self._last_results: dict[str, str] = {}
++        self._last_results: OrderedDict[str, str] = OrderedDict()
++
++    def _remember_last_result(self, user_id: str, value: str) -> None:
++        if user_id in self._last_results:
++            self._last_results.move_to_end(user_id)
++        elif len(self._last_results) >= _MAX_TRACKED_USERS:
++            self._last_results.popitem(last=False)
++
++        self._last_results[user_id] = value
+ 
+     def handle(
+         self,
+@@ -70,7 +85,7 @@ class Gateway:
+         ):
+             try:
+                 float(result.output)
+-                self._last_results[user_id] = result.output
++                self._remember_last_result(user_id, result.output)
+             except (TypeError, ValueError):
+                 pass
+ 
+@@ -98,7 +113,7 @@ class Gateway:
+         )
+ 
+         if response.status is AgentStatus.COMPLETE:
+-            self._last_results[user_id] = response.answer
++            self._remember_last_result(user_id, response.answer)
+             return response.answer
+ 
+         if response.error:
+diff --git a/core/gateway/security.py b/core/gateway/security.py
+new file mode 100644
+index 0000000..d2b0ee5
+--- /dev/null
++++ b/core/gateway/security.py
+@@ -0,0 +1,109 @@
++from __future__ import annotations
++
++import hmac
++import time
++from collections import OrderedDict, defaultdict, deque
++from threading import Lock
++
++from fastapi import HTTPException, Request
++
++from core.config import settings
++
++_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
++
++
++def _client_host(request: Request) -> str:
++    client = request.client
++    return client.host if client else ""
++
++
++async def require_local_or_api_key(request: Request) -> None:
++    """
++    Guard for endpoints that expose user data or system internals.
++
++    Default-secure behaviour:
++      * If SALLY_API_KEY is configured, the request MUST present it via
++        `Authorization: Bearer <key>` or `X-API-Key: <key>` — regardless
++        of where it comes from.
++      * If no API key is configured, the request is only allowed when it
++        originates from the loopback interface (i.e. SALLY is being used
++        as a local single-user assistant, which is the default deploy
++        mode). Anything else is rejected rather than silently trusted.
++    """
++    api_key = settings.server.api_key
++
++    if api_key:
++        header_key = request.headers.get("X-API-Key", "")
++        auth_header = request.headers.get("Authorization", "")
++        bearer_key = (
++            auth_header[len("Bearer "):]
++            if auth_header.startswith("Bearer ")
++            else ""
++        )
++
++        supplied = header_key or bearer_key
++
++        if not supplied or not hmac.compare_digest(supplied, api_key):
++            raise HTTPException(status_code=401, detail="Missing or invalid API key.")
++
++        return
++
++    if _client_host(request) not in _LOOPBACK_HOSTS:
++        raise HTTPException(
++            status_code=403,
++            detail=(
++                "This SALLY instance is not configured for remote access. "
++                "Set SALLY_API_KEY to allow authenticated non-local requests."
++            ),
++        )
++
++
++class RateLimiter:
++    """
++    Small in-memory sliding-window rate limiter keyed by client IP.
++
++    Not a substitute for a real edge/proxy rate limiter in a multi-worker
++    deployment, but enough to stop a single unauthenticated caller from
++    hammering the local LLM/SQLite layer.
++    """
++
++    def __init__(self, limit_per_minute: int) -> None:
++        self.limit = max(1, limit_per_minute)
++        self._hits: dict[str, deque[float]] = defaultdict(deque)
++        self._lock = Lock()
++        # Bound how many distinct client keys we track to avoid unbounded
++        # growth if callers spoof many different source values.
++        self._max_tracked_clients = 5000
++        self._order: OrderedDict[str, None] = OrderedDict()
++
++    def check(self, key: str) -> None:
++        now = time.monotonic()
++        window_start = now - 60.0
++
++        with self._lock:
++            if key not in self._hits and len(self._order) >= self._max_tracked_clients:
++                oldest_key, _ = self._order.popitem(last=False)
++                self._hits.pop(oldest_key, None)
++
++            self._order[key] = None
++            self._order.move_to_end(key)
++
++            hits = self._hits[key]
++            while hits and hits[0] < window_start:
++                hits.popleft()
++
++            if len(hits) >= self.limit:
++                raise HTTPException(
++                    status_code=429,
++                    detail="Rate limit exceeded. Please slow down.",
++                )
++
++            hits.append(now)
++
++
++rate_limiter = RateLimiter(settings.server.rate_limit_per_minute)
++
++
++async def enforce_rate_limit(request: Request) -> None:
++    key = _client_host(request) or "unknown"
++    rate_limiter.check(key)
+diff --git a/core/gateway/web.py b/core/gateway/web.py
+index d9cd55d..c0ba2a7 100644
+--- a/core/gateway/web.py
++++ b/core/gateway/web.py
+@@ -5,7 +5,7 @@ import time
+ from pathlib import Path
+ 
+ import psutil
+-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
++from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.responses import FileResponse, HTMLResponse
+ from fastapi.staticfiles import StaticFiles
+@@ -13,8 +13,11 @@ from pydantic import BaseModel, Field
+ 
+ from core.config import PROJECT_ROOT, settings
+ from core.gateway.gateway import Gateway
++from core.gateway.security import enforce_rate_limit, require_local_or_api_key
+ from core.gateway.whatsapp import WhatsAppGateway
+ 
++_PROTECTED = [Depends(require_local_or_api_key), Depends(enforce_rate_limit)]
++
+ 
+ ROOT = PROJECT_ROOT
+ WEB_DIST = ROOT / "web" / "dist"
+@@ -90,7 +93,7 @@ def _message_dict(message) -> dict[str, object]:
+     }
+ 
+ 
+-@app.post("/chat", response_model=ChatResponse)
++@app.post("/chat", response_model=ChatResponse, dependencies=_PROTECTED)
+ def chat(request: ChatRequest) -> ChatResponse:
+     user_id = _user_id(request.user_id)
+     memory = gateway.coordinator.memory
+@@ -153,7 +156,7 @@ def chat(request: ChatRequest) -> ChatResponse:
+     )
+ 
+ 
+-@app.post("/conversations")
++@app.post("/conversations", dependencies=_PROTECTED)
+ def create_conversation(
+     user_id: str = "web",
+     title: str = "New Conversation",
+@@ -165,7 +168,7 @@ def create_conversation(
+     return _conversation_dict(conversation)
+ 
+ 
+-@app.get("/conversations")
++@app.get("/conversations", dependencies=_PROTECTED)
+ def list_conversations(
+     user_id: str = "web",
+     limit: int = 20,
+@@ -182,7 +185,7 @@ def list_conversations(
+     }
+ 
+ 
+-@app.get("/conversations/{conversation_id}")
++@app.get("/conversations/{conversation_id}", dependencies=_PROTECTED)
+ def get_conversation(
+     conversation_id: str,
+     user_id: str = "web",
+@@ -204,7 +207,7 @@ def get_conversation(
+     }
+ 
+ 
+-@app.get("/tools")
++@app.get("/tools", dependencies=_PROTECTED)
+ def tools() -> dict[str, object]:
+     registry = gateway.coordinator.runtime.tools
+     return {
+@@ -239,7 +242,7 @@ def health() -> dict[str, object]:
+     }
+ 
+ 
+-@app.get("/system/stats")
++@app.get("/system/stats", dependencies=_PROTECTED)
+ def system_stats() -> dict[str, object]:
+     vm = psutil.virtual_memory()
+     disk = psutil.disk_usage(str(ROOT))
+@@ -270,7 +273,7 @@ def system_stats() -> dict[str, object]:
+     }
+ 
+ 
+-@app.get("/memory")
++@app.get("/memory", dependencies=_PROTECTED)
+ def memory_search(
+     q: str,
+     limit: int = 5,
+@@ -299,7 +302,7 @@ def memory_search(
+     }
+ 
+ 
+-@app.get("/memory/recent")
++@app.get("/memory/recent", dependencies=_PROTECTED)
+ def recent_memory(limit: int = 20) -> dict[str, object]:
+     memories = gateway.coordinator.memory.recent(
+         limit=max(1, min(limit, 100)),
+@@ -362,11 +365,23 @@ if WEB_DIST.exists():
+     def home() -> FileResponse:
+         return FileResponse(WEB_DIST / "index.html")
+ 
++    _WEB_DIST_RESOLVED = WEB_DIST.resolve()
++
+     @app.get("/{path:path}", response_class=HTMLResponse)
+     def spa(path: str) -> FileResponse:
+-        file_path = WEB_DIST / path
+-        if file_path.exists() and file_path.is_file():
+-            return FileResponse(file_path)
++        candidate = (WEB_DIST / path).resolve()
++
++        # Reject anything that escapes the web/dist directory (path
++        # traversal via "..", absolute paths, symlink tricks, etc.)
++        # instead of trusting the client-supplied path.
++        is_contained = (
++            candidate == _WEB_DIST_RESOLVED
++            or _WEB_DIST_RESOLVED in candidate.parents
++        )
++
++        if is_contained and candidate.exists() and candidate.is_file():
++            return FileResponse(candidate)
++
+         return FileResponse(WEB_DIST / "index.html")
+ else:
+     @app.get("/", response_class=HTMLResponse)
+diff --git a/memory/skills/news.py b/memory/skills/news.py
+index b997294..e6ea344 100644
+--- a/memory/skills/news.py
++++ b/memory/skills/news.py
+@@ -1,13 +1,26 @@
+ """skill: get headlines. Trigger: news, headlines"""
+-import os, requests
+-from core.config import NEWS_API_KEY
++import requests
++
++from core.config import settings
++
+ 
+ def run(query):
+-    if not NEWS_API_KEY or "YOUR_" in NEWS_API_KEY:
+-        return "[TOOL] No NEWS_API_KEY set in.env — set it to get live headlines"
++    api_key = settings.integrations.news_api_key
++
++    if not api_key or "YOUR_" in api_key:
++        return "[TOOL] No NEWS_API_KEY set in .env — set it to get live headlines"
+ 
+     try:
+-        r = requests.get(f"https://newsapi.org/v2/top-headlines?country=us&pageSize=5&apiKey={NEWS_API_KEY}", timeout=6)
++        r = requests.get(
++            "https://newsapi.org/v2/top-headlines",
++            params={
++                "country": settings.integrations.default_country.lower(),
++                "pageSize": 5,
++                "apiKey": api_key,
++            },
++            timeout=6,
++        )
++        r.raise_for_status()
+         arts = r.json().get("articles", [])[:3]
+         return "\n".join([f"- {a['title']}" for a in arts]) or "No news found"
+     except Exception as e:
+diff --git a/memory/skills/weather.py b/memory/skills/weather.py
+index f1635e1..4b63c45 100644
+--- a/memory/skills/weather.py
++++ b/memory/skills/weather.py
+@@ -1,18 +1,36 @@
+ """skill: get weather for a city. Trigger: weather, temperature, rain"""
+-import os, re, requests
+-from core.config import DEFAULT_CITY, OPENWEATHER_API_KEY
++import re
++
++import requests
++
++from core.config import settings
++
+ 
+ def run(query):
+-    city = DEFAULT_CITY
++    api_key = settings.integrations.openweather_api_key
++    city = settings.integrations.default_city
++
+     m = re.search(r"in ([a-zA-Z ]+)", query.lower())
+-    if m: city = m.group(1).strip().title()
++    if m:
++        city = m.group(1).strip().title()
+ 
+-    if not OPENWEATHER_API_KEY or "YOUR_" in OPENWEATHER_API_KEY:
+-        return f"[TOOL] No OPENWEATHER_API_KEY set in.env — can't fetch live weather for {city}. Get free key at openweathermap.org/api"
++    if not api_key or "YOUR_" in api_key:
++        return (
++            f"[TOOL] No OPENWEATHER_API_KEY set in .env — can't fetch live "
++            f"weather for {city}. Get a free key at openweathermap.org/api"
++        )
+ 
+     try:
+-        r = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric", timeout=6)
++        r = requests.get(
++            "https://api.openweathermap.org/data/2.5/weather",
++            params={"q": city, "appid": api_key, "units": "metric"},
++            timeout=6,
++        )
++        r.raise_for_status()
+         d = r.json()
+-        return f"{city}: {d['weather'][0]['description']}, {d['main']['temp']}°C, humidity {d['main']['humidity']}%"
++        return (
++            f"{city}: {d['weather'][0]['description']}, "
++            f"{d['main']['temp']}°C, humidity {d['main']['humidity']}%"
++        )
+     except Exception as e:
+         return f"weather error: {e}"
+diff --git a/tests/test_gateway_security.py b/tests/test_gateway_security.py
+new file mode 100644
+index 0000000..422cf97
+--- /dev/null
++++ b/tests/test_gateway_security.py
+@@ -0,0 +1,44 @@
++import pytest
++from fastapi import HTTPException
++from fastapi.testclient import TestClient
++
++from core.gateway import web
++from core.gateway.gateway import Gateway, _MAX_TRACKED_USERS
++from core.gateway.security import RateLimiter
++
++
++def test_remote_client_rejected_without_api_key():
++    client = TestClient(web.app, client=("203.0.113.9", 5000))
++    assert client.get("/system/stats").status_code == 403
++    assert client.get("/memory/recent").status_code == 403
++    assert client.post("/chat", json={"message": "hi"}).status_code == 403
++
++
++def test_health_stays_public():
++    client = TestClient(web.app, client=("203.0.113.9", 5000))
++    assert client.get("/health").status_code == 200
++
++
++def test_loopback_client_allowed():
++    client = TestClient(web.app, client=("127.0.0.1", 5000))
++    assert client.get("/system/stats").status_code == 200
++
++
++def test_rate_limiter_blocks_after_limit():
++    limiter = RateLimiter(2)
++    limiter.check("1.2.3.4")
++    limiter.check("1.2.3.4")
++    with pytest.raises(HTTPException) as exc:
++        limiter.check("1.2.3.4")
++    assert exc.value.status_code == 429
++    limiter.check("5.6.7.8")  # other clients unaffected
++
++
++def test_last_results_is_bounded():
++    gw = Gateway.__new__(Gateway)
++    from collections import OrderedDict
++    gw._last_results = OrderedDict()
++    for i in range(_MAX_TRACKED_USERS + 50):
++        gw._remember_last_result(f"user-{i}", "1")
++    assert len(gw._last_results) == _MAX_TRACKED_USERS
++    assert "user-0" not in gw._last_results

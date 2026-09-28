@@ -68,6 +68,8 @@ class MemorySettings:
 class ServerSettings:
     host: str
     port: int
+    api_key: str
+    rate_limit_per_minute: int
 
 
 @dataclass(frozen=True)
@@ -77,12 +79,21 @@ class SallySettings:
 
 
 @dataclass(frozen=True)
+class IntegrationSettings:
+    openweather_api_key: str
+    news_api_key: str
+    default_city: str
+    default_country: str
+
+
+@dataclass(frozen=True)
 class Settings:
     sally: SallySettings
     llm: LLMSettings
     agent: AgentSettings
     memory: MemorySettings
     server: ServerSettings
+    integrations: IntegrationSettings
 
 
 def get_settings() -> Settings:
@@ -120,6 +131,19 @@ def get_settings() -> Settings:
         server=ServerSettings(
             host=_env("HOST", "127.0.0.1"),
             port=_int("PORT", 5678),
+            # When unset, sensitive endpoints are restricted to loopback
+            # callers only (see core/gateway/security.py). Set this to a
+            # long random value if SALLY needs to be reachable remotely
+            # (e.g. for the WhatsApp webhook) and callers must present it
+            # via an `Authorization: Bearer <key>` or `X-API-Key` header.
+            api_key=_env("SALLY_API_KEY", ""),
+            rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 60),
+        ),
+        integrations=IntegrationSettings(
+            openweather_api_key=_env("OPENWEATHER_API_KEY", ""),
+            news_api_key=_env("NEWS_API_KEY", ""),
+            default_city=_env("DEFAULT_CITY", "Calabar"),
+            default_country=_env("DEFAULT_COUNTRY", "NG"),
         ),
     )
 
