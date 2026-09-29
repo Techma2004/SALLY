@@ -1,7 +1,7 @@
 [project]
 name = "sally"
-version = "0.2.0"
-description = "A lightweight, offline-first personal AI assistant built around a modular agent runtime, with memory, tools, voice, and API access."
+version = "0.2.3"
+description = "SALLY Station OS — A lightweight, offline-first personal AI assistant and desktop "Station OS" paired with an Android companion app. Zero cloud dependency, full privacy, modular agents."
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.141.1",
