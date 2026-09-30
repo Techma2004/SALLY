@@ -107,11 +107,13 @@ class Gateway:
         *,
         user_id: str = "anonymous",
         source: str = "local",
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         response = self.handle(
             message,
             user_id=user_id,
             source=source,
+            history=history,
         )
 
         if response.status is AgentStatus.COMPLETE:

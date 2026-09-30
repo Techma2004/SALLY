@@ -3,7 +3,7 @@ from core.gateway import Gateway
 
 
 class FakeCoordinator:
-    def run(self, objective, *, context=None):
+    def run(self, objective, *, context=None, history=None):
         return AgentResult(
             task_id="test-task",
             agent_name="planning",
@@ -64,3 +64,19 @@ def test_gateway_uses_default_safe_tools():
 
     assert response.status.value == "complete"
     assert response.answer == "1000"
+
+
+def test_gateway_chat_forwards_history():
+    captured = {}
+
+    class RecordingCoordinator(FakeCoordinator):
+        def run(self, objective, *, context=None, history=None):
+            captured["history"] = history
+            return super().run(objective, context=context, history=history)
+
+    gateway = Gateway(coordinator=RecordingCoordinator())
+    history = [{"role": "user", "content": "hi"}]
+
+    gateway.chat("Hello again.", user_id="test-user", history=history)
+
+    assert captured["history"] == history

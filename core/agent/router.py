@@ -107,6 +107,11 @@ class TaskRouter:
         "find out",
     )
 
+    _PLANNING_PATTERN = (
+        r"\b(?:plan|plans|planning|roadmap|milestones?|strategy|"
+        r"break (?:it )?down|step[- ]by[- ]step)\b"
+    )
+
     def route(self, objective: str) -> Route:
         text = objective.strip().lower()
 
@@ -158,7 +163,7 @@ class TaskRouter:
                 "Detected a scientific calculation request.",
             )
 
-        if any(word in text for word in self._TESTING_PATTERNS):
+        if self._has_word(self._TESTING_PATTERNS, text):
             return Route(
                 RouteType.AGENT,
                 "testing",
@@ -166,7 +171,7 @@ class TaskRouter:
                 "Detected testing/review intent.",
             )
 
-        if any(word in text for word in self._CODING_PATTERNS):
+        if self._has_word(self._CODING_PATTERNS, text):
             return Route(
                 RouteType.AGENT,
                 "coding",
@@ -174,12 +179,20 @@ class TaskRouter:
                 "Detected software-development intent.",
             )
 
-        if any(word in text for word in self._RESEARCH_PATTERNS):
+        if self._has_word(self._RESEARCH_PATTERNS, text):
             return Route(
                 RouteType.AGENT,
                 "research",
                 0.8,
                 "Detected research/investigation intent.",
+            )
+
+        if re.search(self._PLANNING_PATTERN, text):
+            return Route(
+                RouteType.AGENT,
+                "planning",
+                0.8,
+                "Detected planning intent.",
             )
 
         return Route(
@@ -192,6 +205,10 @@ class TaskRouter:
     @staticmethod
     def _matches(patterns: tuple[str, ...], text: str) -> bool:
         return any(re.search(pattern, text) for pattern in patterns)
+
+    @staticmethod
+    def _has_word(words: tuple[str, ...], text: str) -> bool:
+        return any(re.search(rf"\b{re.escape(w)}", text) for w in words)
 
 
 def create_router() -> TaskRouter:

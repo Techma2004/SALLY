@@ -48,7 +48,7 @@ class Coordinator:
     def choose_agent(self, objective: str) -> str:
         route = self.router.route(objective)
 
-        if route.route_type in (RouteType.AGENT, RouteType.CHAT):
+        if route.route_type is RouteType.AGENT:
             return route.target
 
         return "planning"
@@ -178,7 +178,15 @@ class Coordinator:
             )
 
         if route.route_type is RouteType.CHAT:
-            return self._chat(objective, history=history)
+            memories = self._memory_context(objective).get(
+                "relevant_memories",
+                "",
+            )
+            return self._chat(
+                objective,
+                history=history,
+                memories=memories,
+            )
 
         spec = self.registry.get(route.target)
 
@@ -199,19 +207,24 @@ class Coordinator:
         objective: str,
         *,
         history: list[dict[str, str]] | None = None,
+        memories: str = "",
     ) -> AgentResult:
         from core.config import settings
         from core.llm import chat as llm_chat
 
-        messages = [{
-            "role": "system",
-            "content": (
-                "You are SALLY, a friendly, intelligent and helpful "
-                "AI assistant. Respond naturally and directly. "
-                "Do not output JSON or action objects unless explicitly asked. "
-                "Do not claim to perform actions you cannot perform."
-            ),
-        }]
+        system_prompt = (
+            "You are SALLY, a friendly, intelligent and helpful "
+            "AI assistant. Respond naturally and directly. "
+            "Do not output JSON or action objects unless explicitly asked. "
+            "Do not claim to perform actions you cannot perform."
+        )
+
+        if memories:
+            system_prompt += (
+                "\n\nThings you know about the user:\n" + memories[:800]
+            )
+
+        messages = [{"role": "system", "content": system_prompt}]
 
         if history:
             messages.extend(

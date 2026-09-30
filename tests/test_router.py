@@ -103,3 +103,27 @@ def test_router_routes_scientific_calculation():
 
     assert route.route_type is RouteType.TOOL
     assert route.target == "science_calculate"
+
+
+def test_router_routes_casual_messages_to_chat():
+    router = create_router()
+
+    for text in (
+        "Hello, what is your name?",
+        "What is the capital of France?",
+        "Get latest news for space tech",
+        "Explain the gateway.",
+        "What is a planet?",
+    ):
+        route = router.route(text)
+
+        assert route.route_type is RouteType.CHAT, text
+        assert route.target == "conversation"
+
+
+def test_router_keyword_matching_uses_word_boundaries():
+    router = create_router()
+
+    assert router.route("Write tests for the router").target == "testing"
+    assert router.route("Debug this Python function").target == "coding"
+    assert router.route("Plan SALLY development").target == "planning"

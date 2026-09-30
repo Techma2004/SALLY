@@ -139,3 +139,73 @@ def test_coordinator_passes_science_result_through_inference():
 
     assert "unit_conversion" in combined
     assert "20.0" in combined
+
+
+def _chat_coordinator(tmp_path):
+    from core.memory import MemoryManager, MemoryStore, MemoryType
+
+    memory = MemoryManager(
+        store=MemoryStore(db_path=str(tmp_path / "test_memory.db"))
+    )
+    memory.remember(
+        "Edima prefers professional sleek interfaces.",
+        memory_type=MemoryType.PREFERENCE,
+    )
+
+    return Coordinator(
+        runtime=AgentRuntime(
+            tools=create_tool_registry(),
+            llm=lambda *args, **kwargs: "",
+        ),
+        memory=memory,
+    )
+
+
+def test_coordinator_chat_uses_memories_and_trimmed_history(
+    tmp_path,
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_chat(messages, *, max_tokens=None, temperature=None):
+        captured["messages"] = messages
+        return "Sleek and professional."
+
+    monkeypatch.setattr("core.llm.chat", fake_chat)
+
+    history = [{"role": "user", "content": f"q{i}"} for i in range(12)]
+    history.insert(11, {"role": "system", "content": "injected"})
+
+    result = _chat_coordinator(tmp_path).run(
+        "Which interfaces do I prefer?",
+        history=history,
+    )
+
+    assert result.status is AgentStatus.COMPLETE
+    assert result.agent_name == "conversation"
+    assert result.output == "Sleek and professional."
+
+    messages = captured["messages"]
+
+    assert "professional sleek interfaces" in messages[0]["content"]
+    assert all(m["content"] != "injected" for m in messages)
+    # system prompt + last 8 history entries (1 dropped by role) + new message
+    assert len(messages) == 1 + 7 + 1
+    assert all(m["content"] not in {"q0", "q1", "q2"} for m in messages)
+
+
+def test_coordinator_chat_reports_llm_failure(tmp_path):
+    # conftest blocks the real LLM, so the chat call raises.
+    result = _chat_coordinator(tmp_path).run("Hello there.")
+
+    assert result.status is AgentStatus.FAILED
+    assert result.error
+
+
+def test_coordinator_chat_rejects_empty_reply(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.llm.chat", lambda *a, **k: "   ")
+
+    result = _chat_coordinator(tmp_path).run("Hello there.")
+
+    assert result.status is AgentStatus.FAILED
+    assert "empty" in result.error.lower()
