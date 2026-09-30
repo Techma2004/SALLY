@@ -1,0 +1,14 @@
+[package]
+name = "sally-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "sally_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+sysinfo = "0.33"
+battery = "0.7"
+chrono = "0.4"

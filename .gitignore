@@ -20,3 +20,9 @@ web/node_modules/
 web/dist/
 memory/.prompt_history
 exports/
+
+# Rust native build artifacts
+native/target/
+*.so
+*.dylib
+*.dll

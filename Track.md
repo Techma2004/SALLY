@@ -8,6 +8,9 @@ Core runtime
 - ✅ Hidden inference layer for tool-grounded explanations
 - ✅ SQLite FTS5 memory
 - ✅ Unified Gateway
+- ✅ Rust/Python hybrid native runtime via PyO3
+- ✅ Live machine status: CPU, memory, battery, uptime, platform, and architecture
+- ✅ Reproducible native builds with maturin
 - ✅ Web, Telegram, and WhatsApp adapters
 
 Web workspace
@@ -20,7 +23,8 @@ Web workspace
 - ✅ TUI removed
 
 Current priority
+- Llama/Ollama runtime integration
+- Real agent tool loop
 - Conversation context continuity
-- Evidence-grounded inference
-- Capability enforcement
+- Persistent memory and capability enforcement
 - Better model/context management

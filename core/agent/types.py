@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from core.tooling import ToolRequest, ToolResult
+
 
 class AgentStatus(str, Enum):
     IDLE = "idle"
@@ -30,20 +32,6 @@ class AgentSpec:
     max_steps: int | None = None
     max_tokens: int | None = None
     temperature: float | None = None
-
-
-@dataclass(frozen=True)
-class ToolRequest:
-    name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ToolResult:
-    name: str
-    success: bool
-    output: Any = None
-    error: str | None = None
 
 
 @dataclass

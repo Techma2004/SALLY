@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.agent.tools import ToolRegistry
+from core.tooling import ToolRegistry
 from core.science import (
     convert_units,
     scientific_calculate,
@@ -30,6 +30,15 @@ def create_tool_registry() -> ToolRegistry:
         "datetime",
         _datetime,
         description="Returns the current local date and time.",
+    )
+
+    registry.register(
+        "machine_status",
+        _machine_status,
+        description=(
+            "Returns the live machine time, CPU, memory, battery, "
+            "uptime, platform, and architecture."
+        ),
     )
 
     registry.register(
@@ -68,6 +77,12 @@ def _datetime() -> str:
     return current_datetime()
 
 
+def _machine_status() -> dict:
+    from core.native import machine_status
+
+    return machine_status()
+
+
 TOOL_INFO = (
     ToolInfo(
         name="calculator",
@@ -76,6 +91,13 @@ TOOL_INFO = (
     ToolInfo(
         name="datetime",
         description="Returns the current local date and time.",
+    ),
+    ToolInfo(
+        name="machine_status",
+        description=(
+            "Returns the live machine time, CPU, memory, battery, "
+            "uptime, platform, and architecture."
+        ),
     ),
     ToolInfo(
         name="science_calculate",
