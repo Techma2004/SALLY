@@ -2,6 +2,12 @@ version = 1
 revision = 3
 requires-python = "==3.11.*"
 
+[manifest]
+members = [
+    "sally",
+    "sally-native",
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.5"
@@ -453,6 +459,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "rich" },
+    { name = "sally-native" },
     { name = "uvicorn" },
 ]
 
@@ -472,6 +479,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "rich", specifier = ">=15.0.0" },
+    { name = "sally-native", editable = "native" },
     { name = "uvicorn", specifier = ">=0.53.0" },
 ]
 
@@ -482,6 +490,11 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "setuptools", specifier = ">=75" },
 ]
+
+[[package]]
+name = "sally-native"
+version = "0.1.0"
+source = { editable = "native" }
 
 [[package]]
 name = "setuptools"

@@ -8,10 +8,10 @@
   <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/Offline--first-Local%20LLM-2ECC71?style=flat" alt="Offline-first">
-  <img src="https://img.shields.io/badge/Version-v0.2.0-blue?style=flat" alt="Version">
+  <img src="https://img.shields.io/badge/Version-v0.2.3-blue?style=flat" alt="Version">
 </p>
 
-**SALLY is an offline-first, private-by-default personal AI assistant built around a modular agent runtime.** It runs a local GGUF model through `llama-cpp-python`, uses deterministic tools where possible, stores memory locally in SQLite/FTS5, and exposes a unified Gateway for its interfaces.
+**SALLY is an offline-first, private-by-default personal AI assistant built around a modular agent runtime.** It runs a local GGUF model through `llama-cpp-python`, uses deterministic tools where possible, stores memory locally in SQLite/FTS5, exposes a unified Gateway for its interfaces, and includes a Rust/PyO3 native system layer for efficient hardware and battery information.
 
 > The current runtime is designed around a lightweight local setup first, with optional external integrations available when explicitly configured.
 
@@ -32,7 +32,7 @@
 
 ## Features
 
-**v0.2.0 Current Runtime:**
+**v0.2.3 Current Runtime:**
 
 - **Offline-first Chat:** Powered by a local GGUF model through `llama-cpp-python`. The default model is `llama-3.2-1b-instruct-q4_k_m.gguf`.
 - **Deterministic Tooling:** Requests that can be handled without generation are routed directly to registered tools, including:
@@ -50,6 +50,7 @@
 - **WhatsApp Adapter:** Optional WhatsApp Cloud API webhook integration when the required credentials are configured.
 - **Local Health and Runtime APIs:** FastAPI endpoints expose chat, conversations, memory, tools, health, system statistics, and integration webhooks.
 - **Configurable Runtime:** Model path, context size, CPU threading, agent limits, memory database path, host, and port are read from `.env`.
+- **Native System Layer:** A lightweight Rust/PyO3 extension provides efficient system and battery information without adding a heavy runtime dependency.
 - **No hardcoded personal profile:** Without a local profile file, SALLY falls back to generic `User` / `Unknown` values.
 
 > Voice settings remain available as configuration placeholders, but voice is not the primary active interface in the current runtime. The current launcher starts the web interface by default.
@@ -91,6 +92,10 @@ SALLY/
 │ ├── episodes/ # Local episode storage
 │ ├── history.json # Local conversation/history data
 │ └── skills/ # Local skill data
+├── native/
+│ ├── src/lib.rs # Rust/PyO3 native system layer
+│ ├── Cargo.toml # Native extension configuration
+│ └── pyproject.toml # Maturin build configuration
 ├── models/
 │ └── llama-3.2-1b-instruct-q4_k_m.gguf # Default local GGUF model (not committed)
 ├── web/
@@ -127,10 +132,9 @@ cd SALLY
 
 ### 2. Create the Python Environment
 
-SALLY uses `uv` for Python environment and dependency management.
+SALLY uses `uv` for Python environment and dependency management. The Rust/PyO3 native extension is part of the `uv` workspace and is built automatically during synchronization.
 
 ```bash
-uv venv --python 3.11
 uv sync
 ```
 
@@ -157,6 +161,8 @@ models/llama-3.2-1b-instruct-q4_k_m.gguf
 
 Place that GGUF file at the path above, or set `LLM_MODEL_PATH` in `.env` to another compatible local GGUF model.
 
+SALLY loads the local LLM lazily when inference is actually required, keeping startup lighter and avoiding unnecessary model memory usage for deterministic operations.
+
 Model files are intentionally excluded from Git because of their size.
 
 ### 5. Create Environment File
@@ -178,7 +184,7 @@ The current configuration is driven by `.env`:
 ```ini
 # SALLY
 SALLY_NAME=SALLY
-SALLY_VERSION=0.2.0
+SALLY_VERSION=0.2.3
 
 # LLM
 LLM_MODEL_PATH=models/llama-3.2-1b-instruct-q4_k_m.gguf
@@ -456,7 +462,7 @@ To create a local profile manually, add a gitignored `memory/core/human.json` wi
 | v0.41 | 2025-08-18 | Multi-user onboarding and cross-platform documentation | ✅ Historical |
 | v0.2.0 | 2026-09 | Modular agent runtime, Gateway architecture, deterministic tools, SQLite memory manager, React web workspace, unified interface configuration, `uv` environment | ✅ Current |
 
-**Current runtime line:** The project version was reset during the architecture migration so the active package version (`0.2.0`) reflects the new runtime rather than the historical pre-migration feature set.
+**Current runtime line:** The active package version is `0.2.3`. Historical versions above describe earlier development stages and are retained for project history.
 
 ## Roadmap
 
@@ -485,21 +491,27 @@ To create a local profile manually, add a gitignored `memory/core/human.json` wi
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Do not commit secrets, local databases, or model files
-4. Run the Python tests: `uv run pytest -q`
-5. Build the web interface: `cd web && npm install && npm run build`
+SALLY is currently maintained as a private project by Edima Bassey.
+
+Authorized contributors may work from an approved development copy and should:
+
+1. Create a feature branch: `git checkout -b feature/your-feature`
+2. Do not commit secrets, local databases, or model files
+3. Run the Python tests: `uv run pytest -q`
+4. Build the web interface: `cd web && npm install && npm run build`
+5. Review changes with `git diff --check`
 6. Commit: `git commit -m "feat: your feature description"`
-7. Push and create a pull request
+7. Push changes through the project's authorized development workflow
 
 **Guidelines:**
 - Keep the project offline-first
 - Prefer deterministic tools for deterministic tasks
 - Keep runtime configuration in `.env`
 - Keep active subsystems free of stale duplicate implementations
+- Minimize unnecessary dependencies and background work
 - Add tests when changing runtime behavior
-- Update the README when the public runtime contract changes
+- Update the README when the runtime contract changes
+- Do not redistribute, publish, mirror, or fork the project without authorization
 
 ## Author
 
@@ -511,10 +523,10 @@ Built with a focus on privacy, modularity, portability, and offline-first capabi
 
 ## License
 
-The repository currently does not declare a license file or GitHub license metadata.
+SALLY is currently distributed under the SALLY Private Software License. See [`LICENSE.md`](LICENSE.md) for the complete terms.
 
 ---
 
 > "We are blessed — SALLY speaks." - Offline AI for everyone, everywhere.
 
-⭐ Star this repository if you like private, offline-first AI!
+SALLY is developed with a focus on privacy, efficiency, modularity, and offline-first capability.
