@@ -8,6 +8,7 @@ import re
 class RouteType(str, Enum):
     TOOL = "tool"
     AGENT = "agent"
+    CHAT = "chat"
 
 
 @dataclass(frozen=True)
@@ -182,10 +183,10 @@ class TaskRouter:
             )
 
         return Route(
-            RouteType.AGENT,
-            "planning",
-            0.5,
-            "No specialized intent detected.",
+            RouteType.CHAT,
+            "conversation",
+            0.7,
+            "No specialized intent detected; using conversational response.",
         )
 
     @staticmethod

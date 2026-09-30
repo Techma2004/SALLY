@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from uuid import uuid4
 
 from core.agent.inference import InferenceEngine
 from core.memory import MemoryManager
@@ -47,7 +48,7 @@ class Coordinator:
     def choose_agent(self, objective: str) -> str:
         route = self.router.route(objective)
 
-        if route.route_type is RouteType.AGENT:
+        if route.route_type in (RouteType.AGENT, RouteType.CHAT):
             return route.target
 
         return "planning"
@@ -70,6 +71,7 @@ class Coordinator:
         objective: str,
         *,
         context: dict | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> AgentResult:
         route = self.router.route(objective)
 
@@ -175,6 +177,9 @@ class Coordinator:
                 ],
             )
 
+        if route.route_type is RouteType.CHAT:
+            return self._chat(objective, history=history)
+
         spec = self.registry.get(route.target)
 
         combined_context = dict(context or {})
@@ -187,6 +192,72 @@ class Coordinator:
             spec,
             objective,
             context=combined_context,
+        )
+
+    def _chat(
+        self,
+        objective: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+    ) -> AgentResult:
+        from core.config import settings
+        from core.llm import chat as llm_chat
+
+        messages = [{
+            "role": "system",
+            "content": (
+                "You are SALLY, a friendly, intelligent and helpful "
+                "AI assistant. Respond naturally and directly. "
+                "Do not output JSON or action objects unless explicitly asked. "
+                "Do not claim to perform actions you cannot perform."
+            ),
+        }]
+
+        if history:
+            messages.extend(
+                {"role": item["role"], "content": item["content"]}
+                for item in history[-8:]
+                if item.get("role") in {"user", "assistant"}
+                and item.get("content")
+            )
+
+        messages.append({"role": "user", "content": objective})
+
+        try:
+            answer = llm_chat(
+                messages,
+                max_tokens=settings.agent.max_tokens,
+                temperature=settings.agent.temperature,
+            ).strip()
+        except Exception as exc:
+            return AgentResult(
+                task_id=f"chat-{uuid4().hex[:12]}",
+                agent_name="conversation",
+                status=AgentStatus.FAILED,
+                output="",
+                steps=1,
+                history=[],
+                error=str(exc),
+            )
+
+        if not answer:
+            return AgentResult(
+                task_id=f"chat-{uuid4().hex[:12]}",
+                agent_name="conversation",
+                status=AgentStatus.FAILED,
+                output="",
+                steps=1,
+                history=[],
+                error="Conversation model produced an empty response.",
+            )
+
+        return AgentResult(
+            task_id=f"chat-{uuid4().hex[:12]}",
+            agent_name="conversation",
+            status=AgentStatus.COMPLETE,
+            output=answer,
+            steps=1,
+            history=[],
         )
 
     @staticmethod

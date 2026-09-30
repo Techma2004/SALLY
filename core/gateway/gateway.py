@@ -60,6 +60,7 @@ class Gateway:
         user_id: str = "anonymous",
         source: str = "local",
         metadata: dict[str, Any] | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> GatewayResponse:
         message = message.strip()
 
@@ -77,6 +78,7 @@ class Gateway:
         result = self.coordinator.run(
             message,
             context=request_context,
+            history=history,
         )
 
         if (
@@ -113,7 +115,6 @@ class Gateway:
         )
 
         if response.status is AgentStatus.COMPLETE:
-            self._remember_last_result(user_id, response.answer)
             return response.answer
 
         if response.error:
