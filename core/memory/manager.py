@@ -91,5 +91,6 @@ class MemoryManager:
     def conversation_messages(
         self,
         conversation_id: str,
+        limit: int | None = None,
     ) -> list[ConversationMessage]:
-        return self.store.conversation_messages(conversation_id)
+        return self.store.conversation_messages(conversation_id, limit=limit)

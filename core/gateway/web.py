@@ -113,6 +113,11 @@ def chat(request: ChatRequest) -> ChatResponse:
             title=_title(request.message),
         )
 
+    history = [
+        {"role": item.role, "content": item.content}
+        for item in memory.conversation_messages(conversation.id, limit=8)
+    ]
+
     memory.add_conversation_message(
         conversation.id,
         role="user",
@@ -127,6 +132,7 @@ def chat(request: ChatRequest) -> ChatResponse:
             request.message,
             user_id=user_id,
             source=request.source,
+            history=history,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

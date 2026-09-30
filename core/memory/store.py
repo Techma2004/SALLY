@@ -410,17 +410,30 @@ class MemoryStore:
     def conversation_messages(
         self,
         conversation_id: str,
+        limit: int | None = None,
     ) -> list[ConversationMessage]:
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, conversation_id, role, content, created_at
-                FROM conversation_messages
-                WHERE conversation_id = ?
-                ORDER BY id ASC
-                """,
-                (conversation_id,),
-            ).fetchall()
+            if limit is None:
+                rows = connection.execute(
+                    """
+                    SELECT id, conversation_id, role, content, created_at
+                    FROM conversation_messages
+                    WHERE conversation_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (conversation_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT id, conversation_id, role, content, created_at
+                    FROM conversation_messages
+                    WHERE conversation_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (conversation_id, max(1, limit)),
+                ).fetchall()[::-1]
 
         return [self._conversation_message_from_row(row) for row in rows]
 
