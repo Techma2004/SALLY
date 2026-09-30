@@ -26,3 +26,9 @@ native/target/
 *.so
 *.dylib
 *.dll
+
+# personal runtime data
+memory/MEMORY.md
+memory/USER.md
+memory/episodes/
+memory/history*.json
