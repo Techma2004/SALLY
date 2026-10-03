@@ -1,24 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity,
-  Bot,
-  Brain,
+  ArrowUp,
   Check,
-  Code2,
   Copy,
-  Database,
-  Menu,
-  MessageSquare,
+  History,
+  Moon,
   Plus,
-  RefreshCw,
   Search,
-  Send,
-  ShieldCheck,
-  Sparkles,
   Square,
-  Terminal,
+  Sun,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
 import "./App.css";
@@ -206,31 +197,20 @@ function MessageContent({ text, streaming }) {
   );
 }
 
-function ThinkingBubble() {
+function Thinking() {
   const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setSeconds((s) => s + 1), 1000);
+    const timer = window.setInterval(() => setSeconds((v) => v + 1), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
   return (
-    <div className="message-row assistant">
-      <div className="message-avatar">
-        <Bot size={18} strokeWidth={1.7} />
-      </div>
-
-      <div className="message-stack">
-        <div className="message-bubble thinking-bubble">
-          <div className="thinking-indicator" role="status">
-            <span />
-            <span />
-            <span />
-            <em>
-              SALLY is thinking{seconds >= 3 ? ` · ${seconds}s` : ""}
-            </em>
-          </div>
-        </div>
+    <div className="turn assistant">
+      <div className="who">S</div>
+      <div className="thinking" role="status">
+        <i /><i /><i />
+        <span>{seconds >= 3 ? `Thinking · ${seconds}s` : "Thinking"}</span>
       </div>
     </div>
   );
@@ -260,6 +240,17 @@ function App() {
   const [memories, setMemories] = useState([]);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+  const [theme, setTheme] = useState(
+    () => localStorage.getItem("sally-theme") || "light"
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("sally-theme", theme);
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", theme === "dark" ? "#121413" : "#f6f5f1");
+  }, [theme]);
 
   const loadHealth = async () => {
     setHealth(await api("/health"));
@@ -631,701 +622,393 @@ function App() {
     try {
       await navigator.clipboard.writeText(item.content);
       setCopiedId(item.id);
-
-      window.setTimeout(() => {
-        setCopiedId((current) => (current === item.id ? null : current));
-      }, 1400);
+      window.setTimeout(
+        () => setCopiedId((current) => (current === item.id ? null : current)),
+        1400
+      );
     } catch {
       setError("Clipboard access is unavailable.");
     }
   };
 
-  const navItems = [
-    ["chat", MessageSquare, "Chat"],
-    ["memory", Brain, "Memory"],
-    ["tools", Wrench, "Tools"],
-    ["system", Activity, "System"],
+  const tabs = [
+    ["chat", "Chat"],
+    ["memory", "Memory"],
+    ["tools", "Tools"],
+    ["system", "System"],
   ];
 
-  const connectionLabel =
-    online === false
-      ? "Offline"
-      : health?.status === "ok"
-        ? "Local gateway"
-        : "Connecting…";
-
-  const dotClass = `status-dot ${online === false ? "offline" : ""}`;
-  const awaitingFirstToken =
-    busy && !messages.some((item) => item.streaming);
+  const stateLabel =
+    online === false ? "Offline" : health?.status === "ok" ? "Ready" : "Connecting";
+  const dotClass = `dot ${online === false ? "off" : online ? "on" : ""}`;
+  const awaitingFirstToken = busy && !messages.some((item) => item.streaming);
 
   return (
-    <div className="app-shell">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
-
-      {sidebarOpen && (
-        <div
-          className="mobile-overlay"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-top">
-          <div className="brand">
-            <div className="sally-mark">
-              <Bot size={25} strokeWidth={1.8} />
-            </div>
-
-            <div>
-              <div className="brand-name">SALLY</div>
-              <div className="brand-subtitle">Personal AI</div>
-            </div>
-          </div>
-
-          <button
-            className="icon-button mobile-close"
-            onClick={() => setSidebarOpen(false)}
-            aria-label="Close navigation"
-          >
-            <X size={19} />
-          </button>
-        </div>
-
-        <button className="new-chat-button" onClick={newConversation}>
-          <span className="new-chat-icon">
-            <Plus size={17} />
-          </span>
-          <span>New conversation</span>
+    <div className="shell">
+      <header className="bar">
+        <button
+          className="ghost"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Conversation history"
+          title="History"
+        >
+          <History size={18} />
         </button>
 
-        <nav className="navigation" aria-label="Workspace">
-          <div className="navigation-label">WORKSPACE</div>
+        <div className="brand">
+          <strong>SALLY</strong>
+          <span className="state" title={stateLabel}>
+            <span className={dotClass} />
+            <em>{stateLabel}</em>
+          </span>
+        </div>
 
-          {navItems.map(([key, Icon, label]) => (
+        <nav className="tabs" aria-label="Sections">
+          {tabs.map(([key, label]) => (
             <button
               key={key}
-              className={`nav-item ${view === key ? "active" : ""}`}
+              className={view === key ? "tab on" : "tab"}
               aria-current={view === key ? "page" : undefined}
-              onClick={() => {
-                setView(key);
-                setSidebarOpen(false);
-              }}
+              onClick={() => setView(key)}
             >
-              <Icon size={18} strokeWidth={1.8} />
-              <span>{label}</span>
+              {label}
             </button>
           ))}
         </nav>
 
-        <div className="recent-section">
-          <div className="section-heading">
-            <span>RECENT</span>
-            <span className="section-count">{conversations.length}</span>
-          </div>
+        <div className="bar-actions">
+          <button
+            className="ghost"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            aria-label="Toggle dark mode"
+            title="Toggle theme"
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <button
+            className="ghost"
+            onClick={newConversation}
+            aria-label="New conversation"
+            title="New conversation"
+          >
+            <Plus size={19} />
+          </button>
+        </div>
+      </header>
 
-          <div className="recent-list">
-            {conversations.length === 0 ? (
-              <div className="empty-sidebar">
-                Your conversations will appear here.
-              </div>
-            ) : (
-              conversations.map((conversation) => (
-                <div className="conversation-row" key={conversation.id}>
-                  <button
-                    className={`conversation-item ${
-                      conversation.id === conversationId ? "selected" : ""
-                    }`}
-                    onClick={() => openConversation(conversation.id)}
-                  >
-                    <span>{conversation.title}</span>
-                    <small>{formatDate(conversation.updated_at)}</small>
-                  </button>
+      {sidebarOpen && (
+        <div className="scrim" onClick={() => setSidebarOpen(false)} />
+      )}
 
-                  <button
-                    className="conversation-delete"
-                    onClick={() => deleteConversation(conversation)}
-                    aria-label={`Delete conversation ${conversation.title}`}
-                    title="Delete conversation"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
+      <aside
+        className={sidebarOpen ? "drawer open" : "drawer"}
+        aria-hidden={!sidebarOpen}
+      >
+        <div className="drawer-head">
+          <strong>Conversations</strong>
+          <button
+            className="ghost"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close history"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        <div className="sidebar-footer">
-          <div className="privacy-card">
-            <div className="privacy-icon">
-              <ShieldCheck size={17} />
-            </div>
+        <button className="primary wide" onClick={newConversation}>
+          <Plus size={16} /> New conversation
+        </button>
 
-            <div>
-              <strong>Local & private</strong>
-              <span>Your browser connects to SALLY on this machine.</span>
-            </div>
-          </div>
+        <ul className="history">
+          {conversations.length === 0 && (
+            <li className="muted pad">Nothing saved yet.</li>
+          )}
+          {conversations.map((conversation) => (
+            <li key={conversation.id}>
+              <button
+                className={
+                  conversation.id === conversationId ? "row current" : "row"
+                }
+                onClick={() => openConversation(conversation.id)}
+                tabIndex={sidebarOpen ? 0 : -1}
+              >
+                <span>{conversation.title}</span>
+                <small>{formatDate(conversation.updated_at)}</small>
+              </button>
+              <button
+                className="ghost del"
+                onClick={() => deleteConversation(conversation)}
+                aria-label={`Delete ${conversation.title}`}
+                tabIndex={sidebarOpen ? 0 : -1}
+              >
+                <Trash2 size={15} />
+              </button>
+            </li>
+          ))}
+        </ul>
 
-          <div className="session-line">
-            <div className="session-avatar">
-              <Terminal size={15} />
-            </div>
-
-            <div className="session-copy">
-              <strong>Browser session</strong>
-              <span>{userId.slice(0, 12)}…</span>
-            </div>
-          </div>
-        </div>
+        <p className="muted foot">
+          Stored locally on this machine · {userId.slice(0, 8)}…
+        </p>
       </aside>
 
-      <main className="main-panel">
-        <header className="topbar">
-          <button
-            className="icon-button mobile-menu"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open navigation"
-          >
-            <Menu size={21} />
+      {error && (
+        <div className="notice" role="alert">
+          <span>{error}</span>
+          <button className="ghost" onClick={() => setError("")} aria-label="Dismiss">
+            <X size={15} />
           </button>
+        </div>
+      )}
 
-          <div className="topbar-center">
-            <h1 className="conversation-heading">{conversationTitle}</h1>
-
-            <div className="status-pill">
-              <span className={dotClass} />
-              <span>{connectionLabel}</span>
-            </div>
-          </div>
-
-          <div className="topbar-actions">
-            <button
-              className="icon-button"
-              onClick={loadEverything}
-              title="Refresh SALLY"
-              aria-label="Refresh SALLY"
-            >
-              <RefreshCw size={17} />
-            </button>
-
-            <button
-              className="icon-button accent-icon-button"
-              onClick={newConversation}
-              title="New conversation"
-              aria-label="New conversation"
-            >
-              <Plus size={18} />
-            </button>
-          </div>
-        </header>
-
-        {error && (
-          <div className="error-banner" role="alert">
-            <span>{error}</span>
-            <button
-              className="error-close"
-              onClick={() => setError("")}
-              aria-label="Dismiss error"
-            >
-              <X size={15} />
-            </button>
-          </div>
-        )}
-
-        {view === "chat" && (
-          <section className="chat-view">
-            <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
-              <div
-                className="message-column"
-                role="log"
-                aria-live="polite"
-                aria-label="Conversation"
-              >
-                {messages.length === 0 && !busy ? (
-                  <div className="welcome-state">
-                    <div className="welcome-mark">
-                      <div className="welcome-orbit" />
-                      <Bot size={38} strokeWidth={1.6} />
-                    </div>
-
-                    <div className="welcome-kicker">
-                      Science · Artificial · Learning · Logic · You
-                    </div>
-
-                    <h2 className="welcome-title">How can SALLY help?</h2>
-                    <p>
-                      A local-first AI workspace for conversations,
-                      reasoning, tools, and persistent memory.
-                    </p>
-
-                    <div className="starter-grid">
-                      {STARTERS.map((prompt) => (
-                        <button
-                          key={prompt}
-                          className="starter-card"
-                          onClick={() => sendMessage(prompt)}
-                        >
-                          <Sparkles size={16} />
-                          <span>{prompt}</span>
-                        </button>
-                      ))}
-                    </div>
+      {view === "chat" && (
+        <main className="chat">
+          <div className="scroller" ref={scrollRef} onScroll={handleScroll}>
+            <div className="column" role="log" aria-live="polite" aria-label="Conversation">
+              {messages.length === 0 && !busy ? (
+                <div className="hello">
+                  <h1>Good to see you.</h1>
+                  <p>Ask a question, run a calculation, or just talk.</p>
+                  <div className="starters">
+                    {STARTERS.map((prompt) => (
+                      <button key={prompt} onClick={() => sendMessage(prompt)}>
+                        {prompt}
+                      </button>
+                    ))}
                   </div>
-                ) : (
-                  messages.map((item) => (
-                    <div
-                      key={item.id}
-                      className={`message-row ${
-                        item.role === "user" ? "user" : "assistant"
-                      }`}
-                    >
-                      {item.role !== "user" && (
-                        <div className="message-avatar">
-                          <Bot size={18} strokeWidth={1.7} />
-                        </div>
-                      )}
+                </div>
+              ) : (
+                <>
+                  {conversationId && (
+                    <h2 className="title">{conversationTitle}</h2>
+                  )}
 
-                      <div className="message-stack">
-                        <div
-                          className={`message-bubble ${
-                            item.role === "user" ? "user-bubble" : ""
-                          }`}
-                        >
-                          <div className="message-text">
+                  {messages.map((item) =>
+                    item.role === "user" ? (
+                      <div className="turn user" key={item.id}>
+                        <div className="pill">
+                          <MessageContent text={item.content} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="turn assistant" key={item.id}>
+                        <div className="who">S</div>
+                        <div className="body">
+                          <div className="text">
                             <MessageContent
                               text={item.content}
                               streaming={item.streaming}
                             />
                           </div>
 
-                          <div className="message-meta">
-                            <span>{formatTime(item.created_at)}</span>
-                            {item.role === "assistant" && item.route && (
-                              <>
-                                <span className="meta-separator">·</span>
-                                <span>{routeLabel(item.route)}</span>
-                              </>
-                            )}
-                            {item.elapsed_ms != null && (
-                              <>
-                                <span className="meta-separator">·</span>
+                          {!item.streaming && (
+                            <div className="meta">
+                              <span>{formatTime(item.created_at)}</span>
+                              {item.route && <span>{routeLabel(item.route)}</span>}
+                              {item.elapsed_ms != null && (
                                 <span>{formatElapsed(item.elapsed_ms)}</span>
-                              </>
-                            )}
-                            {item.stopped && (
-                              <>
-                                <span className="meta-separator">·</span>
-                                <span>Stopped</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {item.role === "assistant" && !item.streaming && (
-                          <div className="message-tools">
-                            <button
-                              onClick={() => copyMessage(item)}
-                              className="message-tool"
-                              title="Copy response"
-                            >
-                              {copiedId === item.id ? (
-                                <>
-                                  <Check size={14} />
-                                  <span>Copied</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy size={14} />
-                                  <span>Copy</span>
-                                </>
                               )}
-                            </button>
-                          </div>
-                        )}
+                              {item.stopped && <span>Stopped</span>}
+                              <button
+                                className="link"
+                                onClick={() => copyMessage(item)}
+                              >
+                                {copiedId === item.id ? (
+                                  <>
+                                    <Check size={13} /> Copied
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy size={13} /> Copy
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))
-                )}
-
-                {awaitingFirstToken && <ThinkingBubble />}
-              </div>
-            </div>
-
-            <div className="composer-zone">
-              <div className="composer-shell">
-                <textarea
-                  ref={textareaRef}
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      !event.shiftKey &&
-                      !event.nativeEvent.isComposing
-                    ) {
-                      event.preventDefault();
-                      sendMessage();
-                    }
-                  }}
-                  placeholder={
-                    busy ? "SALLY is replying…" : "Message SALLY…"
-                  }
-                  rows={1}
-                  aria-label="Message SALLY"
-                />
-
-                <div className="composer-footer">
-                  <div className="composer-note">
-                    <span className="composer-live-dot" />
-                    <span>{connectionLabel}</span>
-                    <span className="composer-divider">·</span>
-                    <span>Enter to send</span>
-                    <span className="composer-divider composer-hint">·</span>
-                    <span className="composer-hint">
-                      Shift + Enter for a new line
-                    </span>
-                  </div>
-
-                  {busy ? (
-                    <button
-                      className="send-button stop-button"
-                      onClick={stopGenerating}
-                      aria-label="Stop generating"
-                      title="Stop generating"
-                    >
-                      <Square size={15} fill="currentColor" />
-                    </button>
-                  ) : (
-                    <button
-                      className="send-button"
-                      onClick={() => sendMessage()}
-                      disabled={!message.trim()}
-                      aria-label="Send message"
-                    >
-                      <Send size={17} />
-                    </button>
+                    )
                   )}
-                </div>
-              </div>
 
-              <div className="composer-disclaimer">
-                SALLY can make mistakes. Verify important information.
-              </div>
+                  {awaitingFirstToken && <Thinking />}
+                </>
+              )}
             </div>
-          </section>
-        )}
+          </div>
 
-        {view === "memory" && (
-          <section className="dashboard-view">
-            <div className="view-header">
-              <div>
-                <span className="eyebrow">PERSISTENT MEMORY</span>
-                <h2>Memory</h2>
-                <p>
-                  Direct access to the SQLite memory store used by SALLY.
-                </p>
-              </div>
-
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  loadMemories().catch((err) => setError(err.message))
-                }
-              >
-                <RefreshCw size={15} />
-                Refresh
-              </button>
-            </div>
-
-            <form
-              className="search-box"
-              onSubmit={(event) => {
-                event.preventDefault();
-                loadMemories().catch((err) => setError(err.message));
-              }}
-            >
-              <Search size={17} />
-              <input
-                value={memoryQuery}
-                onChange={(event) => setMemoryQuery(event.target.value)}
-                placeholder="Search memory…"
-                aria-label="Search memory"
+          <div className="dock">
+            <div className="composer">
+              <textarea
+                ref={textareaRef}
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={busy ? "SALLY is replying…" : "Message SALLY"}
+                rows={1}
+                aria-label="Message SALLY"
               />
-              {memoryQuery && (
+              {busy ? (
                 <button
-                  type="button"
-                  className="search-clear"
-                  onClick={() => setMemoryQuery("")}
-                  aria-label="Clear search"
+                  className="send stop"
+                  onClick={stopGenerating}
+                  aria-label="Stop generating"
+                  title="Stop"
                 >
-                  <X size={14} />
+                  <Square size={14} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  className="send"
+                  onClick={() => sendMessage()}
+                  disabled={!message.trim()}
+                  aria-label="Send message"
+                >
+                  <ArrowUp size={18} />
                 </button>
               )}
-              <button type="submit">Search</button>
-            </form>
-
-            <div className="data-list">
-              {memories.length === 0 ? (
-                <div className="empty-state">
-                  <Brain size={22} />
-                  <strong>
-                    {memoryQuery.trim() ? "No matching memories" : "No memories yet"}
-                  </strong>
-                  <span>
-                    {memoryQuery.trim()
-                      ? "Try a different search term."
-                      : "Saved facts and preferences will appear here."}
-                  </span>
-                </div>
-              ) : (
-                memories.map((memory) => (
-                  <article className="data-card" key={memory.id}>
-                    <div className="data-card-top">
-                      <span className="badge">{memory.type}</span>
-                      <span>{formatDate(memory.created_at)}</span>
-                    </div>
-
-                    <p>{memory.content}</p>
-
-                    <div className="data-card-bottom">
-                      <span>Importance</span>
-                      <strong>{Math.round(memory.importance * 100)}%</strong>
-                      <button
-                        type="button"
-                        className="forget-button"
-                        onClick={() => forgetMemory(memory)}
-                        aria-label="Forget this memory"
-                      >
-                        <Trash2 size={13} />
-                        Forget
-                      </button>
-                    </div>
-                  </article>
-                ))
-              )}
             </div>
-          </section>
-        )}
+            <p className="hint">
+              Enter to send · Shift + Enter for a new line · SALLY can make mistakes
+            </p>
+          </div>
+        </main>
+      )}
 
-        {view === "tools" && (
-          <section className="dashboard-view">
-            <div className="view-header">
-              <div>
-                <span className="eyebrow">RUNTIME CAPABILITIES</span>
-                <h2>Tools</h2>
-                <p>
-                  Tools registered by the current SALLY runtime.
-                </p>
-              </div>
-            </div>
+      {view === "memory" && (
+        <main className="page">
+          <h1>Memory</h1>
+          <p className="muted">What SALLY has saved. Forget anything you don't want kept.</p>
 
-            <div className="tool-grid">
-              {tools.map((tool) => (
-                <article className="tool-card" key={tool.name}>
-                  <div className="tool-icon">
-                    <Wrench size={17} />
-                  </div>
+          <form
+            className="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              loadMemories().catch((err) => setError(err.message));
+            }}
+          >
+            <Search size={16} />
+            <input
+              value={memoryQuery}
+              onChange={(event) => setMemoryQuery(event.target.value)}
+              placeholder="Search memory"
+              aria-label="Search memory"
+            />
+            {memoryQuery && (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setMemoryQuery("")}
+                aria-label="Clear search"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </form>
 
+          {memories.length === 0 ? (
+            <p className="empty">
+              {memoryQuery.trim()
+                ? "No matching memories."
+                : "No memories yet. Saved facts and preferences will appear here."}
+            </p>
+          ) : (
+            <ul className="list">
+              {memories.map((memory) => (
+                <li key={memory.id}>
                   <div>
-                    <div className="tool-title-row">
-                      <h3>{tool.name}</h3>
-                      <span>{tool.safety}</span>
-                    </div>
-
-                    <p>{tool.description}</p>
-
+                    <p>{memory.content}</p>
                     <small>
-                      {tool.requires_inference
-                        ? "Verified result + model explanation"
-                        : "Deterministic execution"}
+                      <span className="chip">{memory.type}</span>
+                      {formatDate(memory.created_at)} · importance{" "}
+                      {Math.round(memory.importance * 100)}%
                     </small>
                   </div>
-                </article>
+                  <button
+                    className="ghost danger"
+                    onClick={() => forgetMemory(memory)}
+                    aria-label="Forget this memory"
+                    title="Forget"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
               ))}
-            </div>
-          </section>
-        )}
+            </ul>
+          )}
+        </main>
+      )}
 
-        {view === "system" && (
-          <section className="dashboard-view">
-            <div className="view-header">
-              <div>
-                <span className="eyebrow">LIVE RUNTIME</span>
-                <h2>System</h2>
-                <p>
-                  Live information from the machine running SALLY.
-                </p>
-              </div>
+      {view === "tools" && (
+        <main className="page">
+          <h1>Tools</h1>
+          <p className="muted">What SALLY can do on its own, right now.</p>
 
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  Promise.all([loadHealth(), loadSystem()])
-                    .catch((err) => setError(err.message))
-                }
-              >
-                <RefreshCw size={15} />
-                Refresh
-              </button>
-            </div>
-
-            <div className="stats-grid">
-              {[
-                ["CPU", stats ? `${stats.cpu_percent}%` : "—"],
-                [
-                  "RAM",
-                  stats
-                    ? `${stats.ram_used_gb} / ${stats.ram_total_gb} GB`
-                    : "—",
-                ],
-                [
-                  "Disk",
-                  stats ? `${stats.disk_percent}% used` : "—",
-                ],
-                [
-                  "Memory DB",
-                  stats ? `${stats.memory_db_mb} MB` : "—",
-                ],
-                [
-                  "Context",
-                  stats ? `${stats.context_tokens} tokens` : "—",
-                ],
-                [
-                  "Web port",
-                  stats?.web_port ?? 5678,
-                ],
-              ].map(([label, value]) => (
-                <article className="stat-card" key={label}>
-                  <span>{label}</span>
-                  <strong>{formatRuntime(value)}</strong>
-                </article>
-              ))}
-            </div>
-
-            <div className="runtime-card">
-              <div className="runtime-card-icon">
-                <Database size={19} />
-              </div>
-
-              <div>
-                <span className="eyebrow">MODEL</span>
-                <h3>{shortModel(stats?.model)}</h3>
-                <p>
-                  SALLY v{health?.version ?? "—"} · Local gateway ·{" "}
-                  {stats?.context_tokens ?? "—"} context tokens
-                </p>
-              </div>
-
-              <div className="runtime-health">
-                <span className={dotClass} />
-                <span>{health?.status === "ok" ? "Healthy" : "Checking"}</span>
-              </div>
-            </div>
-          </section>
-        )}
-      </main>
-
-      <aside className="right-panel">
-        <div className="right-panel-inner">
-          <div className="identity-block">
-            <div className="identity-mark">
-              <Bot size={29} strokeWidth={1.6} />
-            </div>
-
-            <div>
-              <div className="identity-name">SALLY</div>
-              <div className="identity-description">
-                Science Artificial Learning Logic And You
-              </div>
-            </div>
-          </div>
-
-          <div className="panel-section-block">
-            <div className="panel-label">
-              <span>LIVE RUNTIME</span>
-              <span className="panel-live">
-                <span className={dotClass} />
-                {connectionLabel}
-              </span>
-            </div>
-
-            <div className="metric-list">
-              <div className="metric-row">
-                <div className="metric-icon"><Activity size={15} /></div>
-                <div>
-                  <span>Gateway</span>
-                  <strong>{health?.status === "ok" ? "Ready" : "Checking"}</strong>
-                </div>
-              </div>
-
-              <div className="metric-row">
-                <div className="metric-icon"><Database size={15} /></div>
-                <div>
-                  <span>Memory</span>
-                  <strong>{stats ? `${stats.memory_db_mb} MB` : "—"}</strong>
-                </div>
-              </div>
-
-              <div className="metric-row">
-                <div className="metric-icon"><Terminal size={15} /></div>
-                <div>
-                  <span>Model</span>
-                  <strong>{shortModel(stats?.model)}</strong>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="panel-section-block">
-            <div className="panel-label">
-              <span>ACTIVE TOOLS</span>
-              <span className="panel-count">{tools.length}</span>
-            </div>
-
-            <div className="tool-list">
-              {tools.slice(0, 6).map((tool) => (
-                <div className="mini-tool" key={tool.name}>
-                  <div className="mini-tool-icon">
-                    <Code2 size={15} />
-                  </div>
-
+          {tools.length === 0 ? (
+            <p className="empty">No tools reported.</p>
+          ) : (
+            <ul className="list">
+              {tools.map((tool) => (
+                <li key={tool.name}>
                   <div>
-                    <strong>{tool.name}</strong>
-                    <span>{tool.requires_inference ? "Inference assisted" : "Deterministic"}</span>
+                    <p>
+                      <strong>{tool.name}</strong>
+                      <span className="chip">{tool.safety}</span>
+                    </p>
+                    <small>{tool.description}</small>
+                    <small>
+                      {tool.requires_inference
+                        ? "Verified result, explained by the model"
+                        : "Deterministic"}
+                    </small>
                   </div>
-                </div>
+                </li>
               ))}
+            </ul>
+          )}
+        </main>
+      )}
 
-              {tools.length === 0 && (
-                <div className="panel-empty">No tools reported.</div>
-              )}
-            </div>
-          </div>
+      {view === "system" && (
+        <main className="page">
+          <h1>System</h1>
+          <p className="muted">
+            {shortModel(stats?.model)} · SALLY v{health?.version ?? "—"}
+          </p>
 
-          <div className="panel-section-block panel-session">
-            <div className="panel-label">
-              <span>SESSION</span>
-            </div>
+          <dl className="facts">
+            {[
+              ["CPU", stats ? `${stats.cpu_percent}%` : "—"],
+              ["RAM", stats ? `${stats.ram_used_gb} / ${stats.ram_total_gb} GB` : "—"],
+              ["Disk", stats ? `${stats.disk_percent}% used` : "—"],
+              ["Memory database", stats ? `${stats.memory_db_mb} MB` : "—"],
+              ["Context window", stats ? `${stats.context_tokens} tokens` : "—"],
+              ["Web port", stats?.web_port ?? 5678],
+              ["Gateway", stateLabel],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{formatRuntime(value)}</dd>
+              </div>
+            ))}
+          </dl>
 
-            <div className="session-stat">
-              <strong>{conversations.length}</strong>
-              <span>saved conversation{conversations.length === 1 ? "" : "s"}</span>
-            </div>
-
-            <div className="session-stat secondary">
-              <strong>{userId.slice(0, 12)}…</strong>
-              <span>browser identity</span>
-            </div>
-          </div>
-
-          <div className="right-panel-footer">
-            <Sparkles size={15} />
-            <span>Local-first · no demo data</span>
-          </div>
-        </div>
-      </aside>
+          <button
+            className="secondary"
+            onClick={loadEverything}
+          >
+            Refresh
+          </button>
+        </main>
+      )}
     </div>
   );
 }
