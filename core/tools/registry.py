@@ -36,8 +36,8 @@ def create_tool_registry() -> ToolRegistry:
         "machine_status",
         _machine_status,
         description=(
-            "Returns the live machine time, CPU, memory, battery, "
-            "uptime, platform, and architecture."
+            "Returns the live machine time, CPU usage, memory, disks, "
+            "network traffic, battery, uptime, platform, and architecture."
         ),
     )
 
