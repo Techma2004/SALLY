@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from uuid import uuid4
 
 from core.config import settings
-from core.llm import chat as llm_chat
 
 from .protocol import parse_action
 from .tools import ToolRegistry
@@ -36,7 +36,9 @@ class AgentRuntime:
         llm: Callable[..., str] | None = None,
     ) -> None:
         self.tools = tools or ToolRegistry()
-        self.llm = llm or llm_chat
+        # None -> use the local model with JSON-constrained decoding and a
+        # deadline; an injected callable (tests, other providers) is used as-is.
+        self.llm = llm
         self.active_tasks: dict[str, AgentTask] = {}
 
     def _available_tools(self, spec: AgentSpec) -> tuple[str, ...]:
@@ -93,6 +95,31 @@ class AgentRuntime:
             default=str,
         )
 
+    def _generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        deadline: float,
+    ) -> str:
+        if self.llm is not None:
+            return self.llm(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+        from core import llm as llm_module
+
+        return llm_module.chat(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_mode=True,
+            timeout_s=max(1.0, deadline - time.monotonic()),
+        )
+
     def run(
         self,
         spec: AgentSpec,
@@ -111,6 +138,7 @@ class AgentRuntime:
         self.active_tasks[task.task_id] = task
 
         config = settings.agent
+        deadline = time.monotonic() + config.timeout
         max_steps = (
             spec.max_steps
             if spec.max_steps is not None
@@ -153,11 +181,30 @@ class AgentRuntime:
         ]
 
         try:
+            repaired = False
+
             for step_number in range(1, max_steps + 1):
-                raw_output = self.llm(
+                if time.monotonic() > deadline:
+                    task.status = AgentStatus.FAILED
+                    task.error = (
+                        f"Agent timed out after {config.timeout} seconds."
+                    )
+
+                    return AgentResult(
+                        task_id=task.task_id,
+                        agent_name=spec.name,
+                        status=AgentStatus.FAILED,
+                        output="",
+                        steps=step_number - 1,
+                        history=task.steps.copy(),
+                        error=task.error,
+                    )
+
+                raw_output = self._generate(
                     messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    deadline=deadline,
                 )
 
                 task.steps.append(
@@ -172,6 +219,24 @@ class AgentRuntime:
                 try:
                     action = parse_action(raw_output)
                 except ValueError as exc:
+                    if not repaired and step_number < max_steps:
+                        # One repair attempt: show the model its bad output.
+                        repaired = True
+                        messages.append(
+                            {"role": "assistant", "content": raw_output}
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "That was not valid. Respond with "
+                                    "exactly one JSON object and nothing "
+                                    "else."
+                                ),
+                            }
+                        )
+                        continue
+
                     task.status = AgentStatus.FAILED
                     task.error = f"Invalid agent action: {exc}"
 

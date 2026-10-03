@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
+import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import psutil
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -26,7 +30,27 @@ gateway = Gateway()
 whatsapp_gateway = WhatsAppGateway(gateway)
 WEB_PORT = settings.server.port
 
+def _preload_model() -> None:
+    try:
+        from core.llm import get_llm
+
+        get_llm()
+    except Exception as exc:  # model missing or failed to load
+        print(f"SALLY: model preload failed: {exc}")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Opt-in (LLM_PRELOAD=true): load the model in the background at startup
+    # so the first message does not pay the model-load delay.
+    if os.getenv("LLM_PRELOAD", "false").strip().lower() in {"1", "true", "yes"}:
+        threading.Thread(target=_preload_model, daemon=True).start()
+
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="SALLY Gateway",
     version=settings.sally.version,
     description="Unified HTTP gateway for SALLY.",
@@ -93,9 +117,15 @@ def _message_dict(message) -> dict[str, object]:
     }
 
 
-@app.post("/chat", response_model=ChatResponse, dependencies=_PROTECTED)
-def chat(request: ChatRequest) -> ChatResponse:
-    user_id = _user_id(request.user_id)
+def _sse(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _open_conversation(request: ChatRequest, user_id: str):
+    """
+    Find or create the conversation, load its recent history, and store the
+    new user message. Returns (conversation, history).
+    """
     memory = gateway.coordinator.memory
 
     conversation = None
@@ -123,6 +153,16 @@ def chat(request: ChatRequest) -> ChatResponse:
         role="user",
         content=request.message,
     )
+
+    return conversation, history
+
+
+@app.post("/chat", response_model=ChatResponse, dependencies=_PROTECTED)
+def chat(request: ChatRequest) -> ChatResponse:
+    user_id = _user_id(request.user_id)
+    memory = gateway.coordinator.memory
+
+    conversation, history = _open_conversation(request, user_id)
 
     started = time.perf_counter()
     route = gateway.coordinator.describe_route(request.message)
@@ -159,6 +199,105 @@ def chat(request: ChatRequest) -> ChatResponse:
         elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
         route=route,
         error=result.error,
+    )
+
+
+@app.post("/chat/stream", dependencies=_PROTECTED)
+async def chat_stream(
+    payload: ChatRequest,
+    request: Request,
+) -> StreamingResponse:
+    """Server-sent events: start, token*, then done (or error)."""
+    if not payload.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    user_id = _user_id(payload.user_id)
+    memory = gateway.coordinator.memory
+
+    conversation, history = await run_in_threadpool(
+        _open_conversation,
+        payload,
+        user_id,
+    )
+
+    route = gateway.coordinator.describe_route(payload.message)
+    started = time.perf_counter()
+    cancel = threading.Event()
+
+    async def events():
+        yield _sse(
+            {
+                "type": "start",
+                "conversation_id": conversation.id,
+                "route": route,
+            }
+        )
+
+        iterator = gateway.stream(
+            payload.message,
+            user_id=user_id,
+            source=payload.source,
+            history=history,
+            cancel=cancel,
+        )
+        finished = object()
+
+        try:
+            while True:
+                event = await run_in_threadpool(next, iterator, finished)
+
+                if event is finished:
+                    break
+
+                if await request.is_disconnected():
+                    break
+
+                if event["type"] == "token":
+                    yield _sse(event)
+                    continue
+
+                response = event["response"]
+
+                if response.answer:
+                    await run_in_threadpool(
+                        memory.add_conversation_message,
+                        conversation.id,
+                        role="assistant",
+                        content=response.answer,
+                    )
+
+                yield _sse(
+                    {
+                        "type": "done",
+                        "answer": response.answer,
+                        "status": response.status.value,
+                        "task_id": response.task_id,
+                        "agent_name": response.agent_name,
+                        "conversation_id": conversation.id,
+                        "elapsed_ms": round(
+                            (time.perf_counter() - started) * 1000,
+                            2,
+                        ),
+                        "route": route,
+                        "error": response.error,
+                    }
+                )
+        except Exception as exc:
+            yield _sse(
+                {
+                    "type": "error",
+                    "detail": f"SALLY gateway error: {exc}",
+                }
+            )
+        finally:
+            # Tells the generation thread to stop at the next token, which
+            # also releases the model lock for the next request.
+            cancel.set()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -211,6 +350,21 @@ def get_conversation(
             for message in memory.conversation_messages(conversation.id)
         ],
     }
+
+
+@app.delete("/conversations/{conversation_id}", dependencies=_PROTECTED)
+def delete_conversation(
+    conversation_id: str,
+    user_id: str = "web",
+) -> dict[str, str]:
+    deleted = gateway.coordinator.memory.delete_conversation(
+        conversation_id,
+        _user_id(user_id),
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    return {"status": "deleted"}
 
 
 @app.get("/tools", dependencies=_PROTECTED)
@@ -325,6 +479,14 @@ def recent_memory(limit: int = 20) -> dict[str, object]:
             for memory in memories
         ]
     }
+
+
+@app.delete("/memory/{memory_id}", dependencies=_PROTECTED)
+def forget_memory(memory_id: str) -> dict[str, str]:
+    if not gateway.coordinator.memory.forget(memory_id):
+        raise HTTPException(status_code=404, detail="Memory not found.")
+
+    return {"status": "deleted"}
 
 
 @app.get("/webhooks/whatsapp")

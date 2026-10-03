@@ -198,7 +198,7 @@ class WhatsAppGateway:
         ]
 
     def process_message(self, message: WhatsAppMessage) -> None:
-        response = self.sally_gateway.handle(
+        response = self.sally_gateway.converse(
             message.text,
             user_id=message.sender,
             source="whatsapp",

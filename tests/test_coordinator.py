@@ -167,7 +167,7 @@ def test_coordinator_chat_uses_memories_and_trimmed_history(
 ):
     captured = {}
 
-    def fake_chat(messages, *, max_tokens=None, temperature=None):
+    def fake_chat(messages, *, max_tokens=None, temperature=None, **_):
         captured["messages"] = messages
         return "Sleek and professional."
 
@@ -209,3 +209,30 @@ def test_coordinator_chat_rejects_empty_reply(tmp_path, monkeypatch):
 
     assert result.status is AgentStatus.FAILED
     assert "empty" in result.error.lower()
+
+
+def test_coordinator_stream_yields_tokens_then_final(tmp_path, monkeypatch):
+    def fake_stream(messages, *, max_tokens=None, temperature=None, **_):
+        yield "Hi "
+        yield "there"
+
+    monkeypatch.setattr("core.llm.stream_chat", fake_stream)
+
+    events = list(_chat_coordinator(tmp_path).stream("Hello there."))
+
+    assert [e["type"] for e in events] == ["token", "token", "final"]
+    assert events[-1]["result"].output == "Hi there"
+    assert events[-1]["result"].status is AgentStatus.COMPLETE
+
+
+def test_coordinator_stream_reports_failure_and_non_chat_routes(tmp_path):
+    coordinator = _chat_coordinator(tmp_path)
+
+    # conftest blocks the real LLM -> failure surfaces as a final event
+    failed = list(coordinator.stream("Hello there."))
+    assert failed[-1]["result"].status is AgentStatus.FAILED
+
+    # tool routes are not streamed: a single final event
+    tool = list(coordinator.stream("Calculate 25 * 40"))
+    assert [e["type"] for e in tool] == ["final"]
+    assert tool[0]["result"].output == "1000"

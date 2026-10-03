@@ -4,7 +4,6 @@ import {
   Bot,
   Brain,
   Check,
-  ChevronDown,
   Code2,
   Copy,
   Database,
@@ -16,14 +15,23 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Square,
   Terminal,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
 import "./App.css";
 
 const USER_KEY = "sally-web-user-id";
+const CLEANUP_KEY = "sally-legacy-cache-cleaned-v1";
 const REFRESH_MS = 30000;
+
+const STARTERS = [
+  "Calculate 25 × 40",
+  "What time is it?",
+  "Convert 5 miles to kilometers",
+];
 
 function getUserId() {
   let id = localStorage.getItem(USER_KEY);
@@ -66,47 +74,175 @@ function formatRuntime(value) {
   return String(value);
 }
 
+// "chat → conversation (0.70): reason" -> "chat · conversation"
+function routeLabel(route) {
+  if (!route) return "";
+  return route.split(" (")[0].replace(" → ", " · ");
+}
+
+function formatElapsed(ms) {
+  if (ms == null) return "";
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+async function api(path, options) {
+  let response;
+
+  try {
+    response = await fetch(path, options);
+  } catch (err) {
+    if (err.name === "AbortError") throw err;
+    throw new Error("Can't reach SALLY. Is the server running?");
+  }
+
+  if (!response.ok) {
+    let detail = "";
+
+    try {
+      detail = (await response.json()).detail;
+    } catch {
+      // Non-JSON error body.
+    }
+
+    throw new Error(detail || `Request failed (${response.status}).`);
+  }
+
+  return response.json();
+}
+
+// Reads a text/event-stream response and calls onEvent for each data: line.
+async function readEvents(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      const line = block.split("\n").find((entry) => entry.startsWith("data: "));
+      if (line) onEvent(JSON.parse(line.slice(6)));
+    }
+  }
+}
+
+function CodeBlock({ code }) {
+  const [copied, setCopied] = useState(false);
+
+  const newline = code.indexOf("\n");
+  const first = newline >= 0 ? code.slice(0, newline).trim() : "";
+  const hasLanguage = newline >= 0 && /^[\w+#.-]{1,20}$/.test(first);
+  const body = (hasLanguage ? code.slice(newline + 1) : code).replace(/\n$/, "");
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // Clipboard can be unavailable on insecure origins.
+    }
+  };
+
+  return (
+    <div className="code-block">
+      <div className="code-block-bar">
+        <span>{hasLanguage ? first : "code"}</span>
+        <button type="button" onClick={copy} aria-label="Copy code">
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre>
+        <code>{body}</code>
+      </pre>
+    </div>
+  );
+}
+
+function InlineText({ text }) {
+  return text
+    .split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g)
+    .map((piece, index) => {
+      if (piece.length > 2 && piece.startsWith("`") && piece.endsWith("`")) {
+        return (
+          <code className="inline-code" key={index}>
+            {piece.slice(1, -1)}
+          </code>
+        );
+      }
+
+      if (piece.length > 4 && piece.startsWith("**") && piece.endsWith("**")) {
+        return <strong key={index}>{piece.slice(2, -2)}</strong>;
+      }
+
+      return piece;
+    });
+}
+
+// Tiny, dependency-free renderer: fenced code, `inline code`, **bold**.
+// Everything is rendered as React text nodes, never as raw HTML.
+function MessageContent({ text, streaming }) {
+  const parts = text.split("```");
+
+  return (
+    <>
+      {parts.map((part, index) =>
+        index % 2 === 1 ? (
+          <CodeBlock code={part} key={index} />
+        ) : (
+          <InlineText text={part} key={index} />
+        )
+      )}
+      {streaming && <span className="stream-cursor" aria-hidden="true" />}
+    </>
+  );
+}
+
+function ThinkingBubble() {
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="message-row assistant">
+      <div className="message-avatar">
+        <Bot size={18} strokeWidth={1.7} />
+      </div>
+
+      <div className="message-stack">
+        <div className="message-bubble thinking-bubble">
+          <div className="thinking-indicator" role="status">
+            <span />
+            <span />
+            <span />
+            <em>
+              SALLY is thinking{seconds >= 3 ? ` · ${seconds}s` : ""}
+            </em>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const userId = useMemo(getUserId, []);
 
-  useEffect(() => {
-    const cleanupKey = "sally-legacy-cache-cleaned-v1";
-
-    if (sessionStorage.getItem(cleanupKey) === "1") {
-      return;
-    }
-
-    let active = true;
-
-    (async () => {
-      try {
-        if ("serviceWorker" in navigator) {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(
-            registrations.map((registration) => registration.unregister())
-          );
-        }
-
-        if ("caches" in window) {
-          const cacheNames = await window.caches.keys();
-          await Promise.all(cacheNames.map((name) => window.caches.delete(name)));
-        }
-      } catch {
-        // Legacy local service-worker cleanup is best effort.
-      }
-
-      sessionStorage.setItem(cleanupKey, "1");
-
-      if (active) {
-        window.setTimeout(() => window.location.reload(), 0);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-  const chatEndRef = useRef(null);
+  const scrollRef = useRef(null);
+  const stickRef = useRef(true);
+  const textareaRef = useRef(null);
+  const abortRef = useRef(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [view, setView] = useState("chat");
@@ -117,6 +253,7 @@ function App() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [online, setOnline] = useState(null);
   const [health, setHealth] = useState(null);
   const [stats, setStats] = useState(null);
   const [tools, setTools] = useState([]);
@@ -125,48 +262,35 @@ function App() {
   const [copiedId, setCopiedId] = useState(null);
 
   const loadHealth = async () => {
-    const response = await fetch("/health");
-    if (!response.ok) throw new Error("SALLY gateway health check failed.");
-    setHealth(await response.json());
+    setHealth(await api("/health"));
   };
 
   const loadSystem = async () => {
-    const response = await fetch("/system/stats");
-    if (!response.ok) throw new Error("Could not load system status.");
-    setStats(await response.json());
+    setStats(await api("/system/stats"));
   };
 
   const loadTools = async () => {
-    const response = await fetch("/tools");
-    if (!response.ok) throw new Error("Could not load tools.");
-    const data = await response.json();
+    const data = await api("/tools");
     setTools(data.tools || []);
   };
 
   const loadConversations = async () => {
-    const response = await fetch(
+    const data = await api(
       `/conversations?user_id=${encodeURIComponent(userId)}`
     );
-
-    if (!response.ok) throw new Error("Could not load conversations.");
-
-    const data = await response.json();
     const next = data.conversations || [];
     setConversations(next);
     return next;
   };
 
   const loadConversation = async (id) => {
-    const response = await fetch(
+    const data = await api(
       `/conversations/${encodeURIComponent(id)}?user_id=${encodeURIComponent(
         userId
       )}`
     );
 
-    if (!response.ok) throw new Error("Could not load conversation.");
-
-    const data = await response.json();
-
+    stickRef.current = true;
     setConversationId(data.conversation.id);
     setConversationTitle(data.conversation.title);
     setMessages(data.messages || []);
@@ -176,28 +300,30 @@ function App() {
   };
 
   const loadMemories = async () => {
-    const endpoint = memoryQuery.trim()
-      ? `/memory?q=${encodeURIComponent(
-          memoryQuery.trim()
-        )}&limit=50`
-      : "/memory/recent?limit=50";
-
-    const response = await fetch(endpoint);
-
-    if (!response.ok) throw new Error("Could not load memory.");
-
-    const data = await response.json();
+    const query = memoryQuery.trim();
+    const data = await api(
+      query
+        ? `/memory?q=${encodeURIComponent(query)}&limit=50`
+        : "/memory/recent?limit=50"
+    );
     setMemories(data.results || []);
   };
+
+  const refreshStatus = () =>
+    Promise.all([loadHealth(), loadSystem()])
+      .then(() => setOnline(true))
+      .catch((err) => {
+        setOnline(false);
+        throw err;
+      });
 
   const loadEverything = async () => {
     try {
       await Promise.all([
-        loadHealth(),
-        loadSystem(),
+        refreshStatus(),
         loadTools(),
         loadConversations(),
-        loadMemories(),
+        view === "memory" ? loadMemories() : Promise.resolve(),
       ]);
       setError("");
     } catch (err) {
@@ -206,6 +332,8 @@ function App() {
   };
 
   const newConversation = () => {
+    abortRef.current?.abort();
+    stickRef.current = true;
     setConversationId(null);
     setConversationTitle("New Conversation");
     setMessages([]);
@@ -213,8 +341,77 @@ function App() {
     setError("");
     setView("chat");
     setSidebarOpen(false);
+    textareaRef.current?.focus();
   };
 
+  const openConversation = (id) => {
+    if (busy) return;
+    loadConversation(id).catch((err) => setError(err.message));
+  };
+
+  const deleteConversation = async (conversation) => {
+    if (busy) return;
+
+    const confirmed = window.confirm(
+      `Delete "${conversation.title}"? This can't be undone.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await api(
+        `/conversations/${encodeURIComponent(
+          conversation.id
+        )}?user_id=${encodeURIComponent(userId)}`,
+        { method: "DELETE" }
+      );
+
+      if (conversation.id === conversationId) newConversation();
+      await loadConversations();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const forgetMemory = async (memory) => {
+    const confirmed = window.confirm(
+      "Forget this memory? SALLY will no longer use it."
+    );
+    if (!confirmed) return;
+
+    try {
+      await api(`/memory/${encodeURIComponent(memory.id)}`, {
+        method: "DELETE",
+      });
+      setMemories((current) => current.filter((item) => item.id !== memory.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  // One-time cleanup of the old service worker / caches (no forced reload).
+  useEffect(() => {
+    if (localStorage.getItem(CLEANUP_KEY) === "1") return;
+
+    (async () => {
+      try {
+        if ("serviceWorker" in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations.map((entry) => entry.unregister()));
+        }
+
+        if ("caches" in window) {
+          const names = await window.caches.keys();
+          await Promise.all(names.map((name) => window.caches.delete(name)));
+        }
+      } catch {
+        // Best effort only.
+      }
+
+      localStorage.setItem(CLEANUP_KEY, "1");
+    })();
+  }, []);
+
+  // Initial load, then poll status only while the tab is visible.
   useEffect(() => {
     let cancelled = false;
 
@@ -222,10 +419,8 @@ function App() {
       try {
         const [nextConversations] = await Promise.all([
           loadConversations(),
-          loadHealth(),
-          loadSystem(),
+          refreshStatus(),
           loadTools(),
-          loadMemories(),
         ]);
 
         if (!cancelled && nextConversations[0]) {
@@ -236,104 +431,199 @@ function App() {
       }
     })();
 
-    const timer = window.setInterval(() => {
-      Promise.all([loadHealth(), loadSystem()])
-        .catch((err) => setError(err.message));
-    }, REFRESH_MS);
+    const poll = () => {
+      if (document.hidden) return;
+      refreshStatus().catch(() => {});
+    };
+
+    const timer = window.setInterval(poll, REFRESH_MS);
+    document.addEventListener("visibilitychange", poll);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
     };
   }, []);
 
+  // Stay pinned to the newest message unless the reader scrolled up.
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "end",
-    });
-  }, [messages, busy]);
+    const el = scrollRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages, busy, view]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
+  // Auto-grow the composer.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 155)}px`;
+  }, [message, view]);
+
+  // Escape closes the mobile sidebar.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
-    if (view === "memory") {
-      loadMemories().catch((err) => setError(err.message));
-    }
-
-    if (view === "tools") {
-      loadTools().catch((err) => setError(err.message));
-    }
-
-    if (view === "system") {
-      Promise.all([loadHealth(), loadSystem()])
-        .catch((err) => setError(err.message));
-    }
+    if (view === "tools") loadTools().catch((err) => setError(err.message));
+    if (view === "system") refreshStatus().catch((err) => setError(err.message));
   }, [view]);
+
+  // Memory view: load on open and (debounced) while typing a search.
+  useEffect(() => {
+    if (view !== "memory") return undefined;
+
+    const timer = window.setTimeout(() => {
+      loadMemories().catch((err) => setError(err.message));
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [view, memoryQuery]);
+
+  const stopGenerating = () => abortRef.current?.abort();
 
   const sendMessage = async (prefilled) => {
     const text = (prefilled ?? message).trim();
 
     if (!text || busy) return;
 
-    const optimistic = {
-      id: `local-${Date.now()}`,
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const stamp = Date.now();
+    const userItem = {
+      id: `local-${stamp}`,
       role: "user",
       content: text,
       created_at: new Date().toISOString(),
     };
+    const replyId = `reply-${stamp}`;
+    let accepted = false;
+    let activeId = conversationId;
 
-    setMessages((current) => [...current, optimistic]);
+    const patchReply = (patch) =>
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === replyId ? { ...item, ...patch } : item
+        )
+      );
+
+    stickRef.current = true;
+    setMessages((current) => [...current, userItem]);
     setMessage("");
     setBusy(true);
     setError("");
 
     try {
-      const response = await fetch("/chat", {
+      const response = await fetch("/chat/stream", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
           user_id: userId,
           source: "web",
           conversation_id: conversationId,
         }),
+        signal: controller.signal,
+      }).catch((err) => {
+        if (err.name === "AbortError") throw err;
+        throw new Error("Can't reach SALLY. Is the server running?");
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(
-          data.detail || "SALLY could not process the request."
-        );
+        let detail = "";
+        try {
+          detail = (await response.json()).detail;
+        } catch {
+          // Non-JSON error body.
+        }
+        throw new Error(detail || "SALLY could not process the request.");
       }
 
-      setConversationId(data.conversation_id);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `assistant-${data.task_id}`,
-          role: "assistant",
-          content: data.answer,
-          created_at: new Date().toISOString(),
-          agent_name: data.agent_name,
-          route: data.route,
-          elapsed_ms: data.elapsed_ms,
-        },
-      ]);
-
-      await loadConversations();
-
-      if (!conversationId) {
-        await loadConversation(data.conversation_id);
-      }
+      await readEvents(response, (event) => {
+        if (event.type === "start") {
+          accepted = true;
+          activeId = event.conversation_id;
+          setConversationId(event.conversation_id);
+          setMessages((current) => [
+            ...current,
+            {
+              id: replyId,
+              role: "assistant",
+              content: "",
+              created_at: new Date().toISOString(),
+              streaming: true,
+              route: event.route,
+            },
+          ]);
+        } else if (event.type === "token") {
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === replyId
+                ? { ...item, content: item.content + event.text }
+                : item
+            )
+          );
+        } else if (event.type === "done") {
+          if (!event.answer) {
+            setMessages((current) =>
+              current.filter((item) => item.id !== replyId)
+            );
+            setError(event.error || "SALLY returned an empty response.");
+          } else {
+            patchReply({
+              id: `assistant-${event.task_id}`,
+              content: event.answer,
+              streaming: false,
+              agent_name: event.agent_name,
+              route: event.route,
+              elapsed_ms: event.elapsed_ms,
+            });
+          }
+        } else if (event.type === "error") {
+          throw new Error(event.detail);
+        }
+      });
     } catch (err) {
-      setError(err.message);
-      setMessages((current) =>
-        current.filter((item) => item.id !== optimistic.id)
-      );
+      if (err.name === "AbortError") {
+        patchReply({ streaming: false, stopped: true });
+      } else {
+        setError(err.message);
+
+        setMessages((current) =>
+          current.filter(
+            (item) =>
+              !(item.id === replyId && !item.content) &&
+              !(item.id === userItem.id && !accepted)
+          )
+        );
+
+        patchReply({ streaming: false });
+
+        if (!accepted) setMessage(text);
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
+      textareaRef.current?.focus();
+
+      loadConversations()
+        .then((list) => {
+          const match = list.find((item) => item.id === activeId);
+          if (match) setConversationTitle(match.title);
+        })
+        .catch(() => {});
     }
   };
 
@@ -351,14 +641,22 @@ function App() {
   };
 
   const navItems = [
-    ["chat", MessageSquare, "Conversations"],
+    ["chat", MessageSquare, "Chat"],
     ["memory", Brain, "Memory"],
     ["tools", Wrench, "Tools"],
     ["system", Activity, "System"],
   ];
 
   const connectionLabel =
-    health?.status === "ok" ? "Local gateway" : "Connecting…";
+    online === false
+      ? "Offline"
+      : health?.status === "ok"
+        ? "Local gateway"
+        : "Connecting…";
+
+  const dotClass = `status-dot ${online === false ? "offline" : ""}`;
+  const awaitingFirstToken =
+    busy && !messages.some((item) => item.streaming);
 
   return (
     <div className="app-shell">
@@ -401,13 +699,14 @@ function App() {
           <span>New conversation</span>
         </button>
 
-        <nav className="navigation">
+        <nav className="navigation" aria-label="Workspace">
           <div className="navigation-label">WORKSPACE</div>
 
           {navItems.map(([key, Icon, label]) => (
             <button
               key={key}
               className={`nav-item ${view === key ? "active" : ""}`}
+              aria-current={view === key ? "page" : undefined}
               onClick={() => {
                 setView(key);
                 setSidebarOpen(false);
@@ -422,9 +721,7 @@ function App() {
         <div className="recent-section">
           <div className="section-heading">
             <span>RECENT</span>
-            <span className="section-count">
-              {conversations.length}
-            </span>
+            <span className="section-count">{conversations.length}</span>
           </div>
 
           <div className="recent-list">
@@ -434,20 +731,26 @@ function App() {
               </div>
             ) : (
               conversations.map((conversation) => (
-                <button
-                  key={conversation.id}
-                  className={`conversation-item ${
-                    conversation.id === conversationId ? "selected" : ""
-                  }`}
-                  onClick={() =>
-                    loadConversation(conversation.id).catch((err) =>
-                      setError(err.message)
-                    )
-                  }
-                >
-                  <span>{conversation.title}</span>
-                  <small>{formatDate(conversation.updated_at)}</small>
-                </button>
+                <div className="conversation-row" key={conversation.id}>
+                  <button
+                    className={`conversation-item ${
+                      conversation.id === conversationId ? "selected" : ""
+                    }`}
+                    onClick={() => openConversation(conversation.id)}
+                  >
+                    <span>{conversation.title}</span>
+                    <small>{formatDate(conversation.updated_at)}</small>
+                  </button>
+
+                  <button
+                    className="conversation-delete"
+                    onClick={() => deleteConversation(conversation)}
+                    aria-label={`Delete conversation ${conversation.title}`}
+                    title="Delete conversation"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -489,17 +792,10 @@ function App() {
           </button>
 
           <div className="topbar-center">
-            <button
-              className="conversation-heading"
-              onClick={() => setView("chat")}
-              title="Return to conversation"
-            >
-              <span>{conversationTitle}</span>
-              <ChevronDown size={15} />
-            </button>
+            <h1 className="conversation-heading">{conversationTitle}</h1>
 
             <div className="status-pill">
-              <span className="status-dot" />
+              <span className={dotClass} />
               <span>{connectionLabel}</span>
             </div>
           </div>
@@ -540,9 +836,14 @@ function App() {
 
         {view === "chat" && (
           <section className="chat-view">
-            <div className="chat-scroll">
-              <div className="message-column">
-                {messages.length === 0 ? (
+            <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
+              <div
+                className="message-column"
+                role="log"
+                aria-live="polite"
+                aria-label="Conversation"
+              >
+                {messages.length === 0 && !busy ? (
                   <div className="welcome-state">
                     <div className="welcome-mark">
                       <div className="welcome-orbit" />
@@ -553,18 +854,14 @@ function App() {
                       Science · Artificial · Learning · Logic · You
                     </div>
 
-                    <h1>How can SALLY help?</h1>
+                    <h2 className="welcome-title">How can SALLY help?</h2>
                     <p>
                       A local-first AI workspace for conversations,
                       reasoning, tools, and persistent memory.
                     </p>
 
                     <div className="starter-grid">
-                      {[
-                        "Explain how your memory works",
-                        "Calculate 25 × 40",
-                        "Show me the tools you currently have",
-                      ].map((prompt) => (
+                      {STARTERS.map((prompt) => (
                         <button
                           key={prompt}
                           className="starter-card"
@@ -597,27 +894,36 @@ function App() {
                           }`}
                         >
                           <div className="message-text">
-                            {item.content}
+                            <MessageContent
+                              text={item.content}
+                              streaming={item.streaming}
+                            />
                           </div>
 
                           <div className="message-meta">
                             <span>{formatTime(item.created_at)}</span>
-                            {item.route && (
+                            {item.role === "assistant" && item.route && (
                               <>
                                 <span className="meta-separator">·</span>
-                                <span>{item.route}</span>
+                                <span>{routeLabel(item.route)}</span>
                               </>
                             )}
                             {item.elapsed_ms != null && (
                               <>
                                 <span className="meta-separator">·</span>
-                                <span>{item.elapsed_ms} ms</span>
+                                <span>{formatElapsed(item.elapsed_ms)}</span>
+                              </>
+                            )}
+                            {item.stopped && (
+                              <>
+                                <span className="meta-separator">·</span>
+                                <span>Stopped</span>
                               </>
                             )}
                           </div>
                         </div>
 
-                        {item.role === "assistant" && (
+                        {item.role === "assistant" && !item.streaming && (
                           <div className="message-tools">
                             <button
                               onClick={() => copyMessage(item)}
@@ -643,42 +949,29 @@ function App() {
                   ))
                 )}
 
-                {busy && (
-                  <div className="message-row assistant">
-                    <div className="message-avatar">
-                      <Bot size={18} strokeWidth={1.7} />
-                    </div>
-
-                    <div className="message-stack">
-                      <div className="message-bubble thinking-bubble">
-                        <div className="thinking-indicator">
-                          <span />
-                          <span />
-                          <span />
-                          <em>SALLY is thinking</em>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div ref={chatEndRef} />
+                {awaitingFirstToken && <ThinkingBubble />}
               </div>
             </div>
 
             <div className="composer-zone">
               <div className="composer-shell">
                 <textarea
+                  ref={textareaRef}
                   value={message}
-                  disabled={busy}
                   onChange={(event) => setMessage(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
                       event.preventDefault();
                       sendMessage();
                     }
                   }}
-                  placeholder="Message SALLY…"
+                  placeholder={
+                    busy ? "SALLY is replying…" : "Message SALLY…"
+                  }
                   rows={1}
                   aria-label="Message SALLY"
                 />
@@ -689,18 +982,31 @@ function App() {
                     <span>{connectionLabel}</span>
                     <span className="composer-divider">·</span>
                     <span>Enter to send</span>
-                    <span className="composer-divider">·</span>
-                    <span>Shift + Enter for a new line</span>
+                    <span className="composer-divider composer-hint">·</span>
+                    <span className="composer-hint">
+                      Shift + Enter for a new line
+                    </span>
                   </div>
 
-                  <button
-                    className="send-button"
-                    onClick={() => sendMessage()}
-                    disabled={!message.trim() || busy}
-                    aria-label="Send message"
-                  >
-                    <Send size={17} />
-                  </button>
+                  {busy ? (
+                    <button
+                      className="send-button stop-button"
+                      onClick={stopGenerating}
+                      aria-label="Stop generating"
+                      title="Stop generating"
+                    >
+                      <Square size={15} fill="currentColor" />
+                    </button>
+                  ) : (
+                    <button
+                      className="send-button"
+                      onClick={() => sendMessage()}
+                      disabled={!message.trim()}
+                      aria-label="Send message"
+                    >
+                      <Send size={17} />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -745,7 +1051,18 @@ function App() {
                 value={memoryQuery}
                 onChange={(event) => setMemoryQuery(event.target.value)}
                 placeholder="Search memory…"
+                aria-label="Search memory"
               />
+              {memoryQuery && (
+                <button
+                  type="button"
+                  className="search-clear"
+                  onClick={() => setMemoryQuery("")}
+                  aria-label="Clear search"
+                >
+                  <X size={14} />
+                </button>
+              )}
               <button type="submit">Search</button>
             </form>
 
@@ -753,8 +1070,14 @@ function App() {
               {memories.length === 0 ? (
                 <div className="empty-state">
                   <Brain size={22} />
-                  <strong>No matching memories</strong>
-                  <span>SALLY has nothing to show for this query yet.</span>
+                  <strong>
+                    {memoryQuery.trim() ? "No matching memories" : "No memories yet"}
+                  </strong>
+                  <span>
+                    {memoryQuery.trim()
+                      ? "Try a different search term."
+                      : "Saved facts and preferences will appear here."}
+                  </span>
                 </div>
               ) : (
                 memories.map((memory) => (
@@ -769,6 +1092,15 @@ function App() {
                     <div className="data-card-bottom">
                       <span>Importance</span>
                       <strong>{Math.round(memory.importance * 100)}%</strong>
+                      <button
+                        type="button"
+                        className="forget-button"
+                        onClick={() => forgetMemory(memory)}
+                        aria-label="Forget this memory"
+                      >
+                        <Trash2 size={13} />
+                        Forget
+                      </button>
                     </div>
                   </article>
                 ))
@@ -881,13 +1213,13 @@ function App() {
                 <span className="eyebrow">MODEL</span>
                 <h3>{shortModel(stats?.model)}</h3>
                 <p>
-                  SALLY v{health?.version ?? "—"} · Local gateway ·
+                  SALLY v{health?.version ?? "—"} · Local gateway ·{" "}
                   {stats?.context_tokens ?? "—"} context tokens
                 </p>
               </div>
 
               <div className="runtime-health">
-                <span className="status-dot" />
+                <span className={dotClass} />
                 <span>{health?.status === "ok" ? "Healthy" : "Checking"}</span>
               </div>
             </div>
@@ -914,7 +1246,7 @@ function App() {
             <div className="panel-label">
               <span>LIVE RUNTIME</span>
               <span className="panel-live">
-                <span className="status-dot" />
+                <span className={dotClass} />
                 {connectionLabel}
               </span>
             </div>

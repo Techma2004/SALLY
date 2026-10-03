@@ -5,7 +5,6 @@ from collections.abc import Callable
 from typing import Any
 
 from core.config import settings
-from core.llm import chat as llm_chat
 
 
 class InferenceEngine:
@@ -16,8 +15,16 @@ class InferenceEngine:
     The interface never needs to know that this intermediate step exists.
     """
 
+    @staticmethod
+    def _default_llm(*args: Any, **kwargs: Any) -> str:
+        # Resolved at call time so tests (and future providers) can replace
+        # core.llm.chat, and importing this module never loads the model.
+        from core import llm as llm_module
+
+        return llm_module.chat(*args, **kwargs)
+
     def __init__(self, llm: Callable[..., str] | None = None) -> None:
-        self.llm = llm or llm_chat
+        self.llm = llm or self._default_llm
 
     def compose(
         self,

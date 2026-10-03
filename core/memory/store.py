@@ -407,6 +407,28 @@ class MemoryStore:
             created_at=created_at,
         )
 
+    def delete_conversation(
+        self,
+        conversation_id: str,
+        user_id: str,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            )
+
+        return cursor.rowcount > 0
+
+    def delete_memory(self, memory_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM memories WHERE id = ?",
+                (memory_id,),
+            )
+
+        return cursor.rowcount > 0
+
     def conversation_messages(
         self,
         conversation_id: str,

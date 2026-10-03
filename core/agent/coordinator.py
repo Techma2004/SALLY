@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from threading import Event
 from uuid import uuid4
 
 from core.agent.inference import InferenceEngine
@@ -202,16 +204,13 @@ class Coordinator:
             context=combined_context,
         )
 
-    def _chat(
+    def _chat_messages(
         self,
         objective: str,
         *,
         history: list[dict[str, str]] | None = None,
         memories: str = "",
-    ) -> AgentResult:
-        from core.config import settings
-        from core.llm import chat as llm_chat
-
+    ) -> list[dict[str, str]]:
         system_prompt = (
             "You are SALLY, a friendly, intelligent and helpful "
             "AI assistant. Respond naturally and directly. "
@@ -236,42 +235,132 @@ class Coordinator:
 
         messages.append({"role": "user", "content": objective})
 
+        return messages
+
+    @staticmethod
+    def _chat_result(
+        status: AgentStatus,
+        output: str = "",
+        error: str | None = None,
+    ) -> AgentResult:
+        return AgentResult(
+            task_id=f"chat-{uuid4().hex[:12]}",
+            agent_name="conversation",
+            status=status,
+            output=output,
+            steps=1,
+            history=[],
+            error=error,
+        )
+
+    def _chat(
+        self,
+        objective: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        memories: str = "",
+    ) -> AgentResult:
+        from core.config import settings
+        from core.llm import chat as llm_chat
+
+        messages = self._chat_messages(
+            objective,
+            history=history,
+            memories=memories,
+        )
+
         try:
             answer = llm_chat(
                 messages,
                 max_tokens=settings.agent.max_tokens,
                 temperature=settings.agent.temperature,
+                timeout_s=settings.agent.timeout,
             ).strip()
         except Exception as exc:
-            return AgentResult(
-                task_id=f"chat-{uuid4().hex[:12]}",
-                agent_name="conversation",
-                status=AgentStatus.FAILED,
-                output="",
-                steps=1,
-                history=[],
-                error=str(exc),
-            )
+            return self._chat_result(AgentStatus.FAILED, error=str(exc))
 
         if not answer:
-            return AgentResult(
-                task_id=f"chat-{uuid4().hex[:12]}",
-                agent_name="conversation",
-                status=AgentStatus.FAILED,
-                output="",
-                steps=1,
-                history=[],
+            return self._chat_result(
+                AgentStatus.FAILED,
                 error="Conversation model produced an empty response.",
             )
 
-        return AgentResult(
-            task_id=f"chat-{uuid4().hex[:12]}",
-            agent_name="conversation",
-            status=AgentStatus.COMPLETE,
-            output=answer,
-            steps=1,
-            history=[],
+        return self._chat_result(AgentStatus.COMPLETE, answer)
+
+    def stream(
+        self,
+        objective: str,
+        *,
+        context: dict | None = None,
+        history: list[dict[str, str]] | None = None,
+        cancel: Event | None = None,
+    ) -> Iterator[dict]:
+        """
+        Yield {"type": "token", "text": ...} events while a conversational
+        reply is generated, then one {"type": "final", "result": AgentResult}.
+
+        Tool and agent routes are not streamed; they yield only the final
+        event.
+        """
+        route = self.router.route(objective)
+
+        if route.route_type is not RouteType.CHAT:
+            yield {
+                "type": "final",
+                "result": self.run(
+                    objective,
+                    context=context,
+                    history=history,
+                ),
+            }
+            return
+
+        from core import llm as llm_module
+        from core.config import settings
+
+        memories = self._memory_context(objective).get(
+            "relevant_memories",
+            "",
         )
+        messages = self._chat_messages(
+            objective,
+            history=history,
+            memories=memories,
+        )
+
+        parts: list[str] = []
+
+        try:
+            for delta in llm_module.stream_chat(
+                messages,
+                max_tokens=settings.agent.max_tokens,
+                temperature=settings.agent.temperature,
+                timeout_s=settings.agent.timeout,
+                cancel=cancel,
+            ):
+                parts.append(delta)
+                yield {"type": "token", "text": delta}
+        except Exception as exc:
+            yield {
+                "type": "final",
+                "result": self._chat_result(
+                    AgentStatus.FAILED,
+                    error=str(exc),
+                ),
+            }
+            return
+
+        answer = "".join(parts).strip()
+
+        if not answer:
+            result = self._chat_result(
+                AgentStatus.FAILED,
+                error="Conversation model produced an empty response.",
+            )
+        else:
+            result = self._chat_result(AgentStatus.COMPLETE, answer)
+
+        yield {"type": "final", "result": result}
 
     @staticmethod
     def _tool_arguments(

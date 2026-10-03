@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Iterator
+from threading import Event
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.agent import Coordinator
-from core.agent.types import AgentStatus
+from core.agent.types import AgentResult, AgentStatus
 
 # Caps how many distinct user_ids we remember a "last result" for. user_id
 # is client-supplied and unauthenticated, so without a cap a caller could
@@ -53,6 +55,46 @@ class Gateway:
 
         self._last_results[user_id] = value
 
+    def _request_context(
+        self,
+        user_id: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        request_context = dict(metadata or {})
+
+        if user_id in self._last_results:
+            request_context.setdefault(
+                "last_result",
+                self._last_results[user_id],
+            )
+
+        return request_context
+
+    def _to_response(
+        self,
+        result: AgentResult,
+        user_id: str,
+        source: str,
+    ) -> GatewayResponse:
+        if (
+            result.status is AgentStatus.COMPLETE
+            and result.agent_name == "calculator"
+        ):
+            try:
+                float(result.output)
+                self._remember_last_result(user_id, result.output)
+            except (TypeError, ValueError):
+                pass
+
+        return GatewayResponse(
+            answer=result.output,
+            status=result.status,
+            task_id=result.task_id,
+            agent_name=result.agent_name,
+            source=source,
+            error=result.error,
+        )
+
     def handle(
         self,
         message: str,
@@ -67,39 +109,99 @@ class Gateway:
         if not message:
             raise ValueError("Message cannot be empty.")
 
-        request_context = dict(metadata or {})
-
-        if user_id in self._last_results:
-            request_context.setdefault(
-                "last_result",
-                self._last_results[user_id],
-            )
-
         result = self.coordinator.run(
             message,
-            context=request_context,
+            context=self._request_context(user_id, metadata),
             history=history,
         )
 
-        if (
-            result.status is AgentStatus.COMPLETE
-            and result.agent_name == "calculator"
+        return self._to_response(result, user_id, source)
+
+    def stream(
+        self,
+        message: str,
+        *,
+        user_id: str = "anonymous",
+        source: str = "local",
+        metadata: dict[str, Any] | None = None,
+        history: list[dict[str, str]] | None = None,
+        cancel: Event | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """
+        Like handle(), but yields {"type": "token", "text": ...} events as a
+        conversational reply is generated, then one
+        {"type": "final", "response": GatewayResponse}.
+        """
+        message = message.strip()
+
+        if not message:
+            raise ValueError("Message cannot be empty.")
+
+        for event in self.coordinator.stream(
+            message,
+            context=self._request_context(user_id, metadata),
+            history=history,
+            cancel=cancel,
         ):
-            try:
-                float(result.output)
-                self._remember_last_result(user_id, result.output)
-            except (TypeError, ValueError):
-                pass
+            if event["type"] == "token":
+                yield event
+            else:
+                yield {
+                    "type": "final",
+                    "response": self._to_response(
+                        event["result"],
+                        user_id,
+                        source,
+                    ),
+                }
 
+    def converse(
+        self,
+        message: str,
+        *,
+        user_id: str,
+        source: str,
+    ) -> GatewayResponse:
+        """
+        handle() with a persistent per-user thread, for messaging channels
+        (Telegram, WhatsApp) that have no conversation id of their own.
+        """
+        memory = self.coordinator.memory
+        owner = f"{source}:{user_id}"
 
-        return GatewayResponse(
-            answer=result.output,
-            status=result.status,
-            task_id=result.task_id,
-            agent_name=result.agent_name,
-            source=source,
-            error=result.error,
+        recent = memory.recent_conversations(owner, limit=1)
+        conversation = (
+            recent[0]
+            if recent
+            else memory.create_conversation(owner, title=message.strip()[:60])
         )
+
+        history = [
+            {"role": item.role, "content": item.content}
+            for item in memory.conversation_messages(conversation.id, limit=8)
+        ]
+
+        response = self.handle(
+            message,
+            user_id=user_id,
+            source=source,
+            history=history,
+        )
+
+        memory.add_conversation_message(
+            conversation.id,
+            role="user",
+            content=message.strip(),
+        )
+
+        if response.answer:
+            memory.add_conversation_message(
+                conversation.id,
+                role="assistant",
+                content=response.answer,
+            )
+
+        return response
 
     def chat(
         self,

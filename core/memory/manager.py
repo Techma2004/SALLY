@@ -88,6 +88,17 @@ class MemoryManager:
             content=content,
         )
 
+    def delete_conversation(
+        self,
+        conversation_id: str,
+        user_id: str,
+    ) -> bool:
+        return self.store.delete_conversation(conversation_id, user_id)
+
+    def forget(self, memory_id: str) -> bool:
+        """Permanently delete one stored memory."""
+        return self.store.delete_memory(memory_id)
+
     def conversation_messages(
         self,
         conversation_id: str,

@@ -81,7 +81,7 @@ def run_telegram(gateway: Gateway | None = None) -> None:
         await update.message.chat.send_action("typing")
 
         response = await asyncio.to_thread(
-            gateway.handle,
+            gateway.converse,
             update.message.text,
             user_id=str(user_id),
             source="telegram",
