@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from core.version import get_version
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -55,6 +57,10 @@ class AgentSettings:
     timeout: int
     max_tokens: int
     temperature: float
+    # Conversation is warmer and more varied than structured agent output.
+    chat_temperature: float = 0.7
+    # Experimental: let the local model classify messages the rules missed.
+    intent_llm: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,7 +106,7 @@ def get_settings() -> Settings:
     return Settings(
         sally=SallySettings(
             name=_env("SALLY_NAME", "SALLY"),
-            version=_env("SALLY_VERSION", "0.2.0"),
+            version=get_version(),
         ),
         llm=LLMSettings(
             model_path=_env(
@@ -122,6 +128,8 @@ def get_settings() -> Settings:
             timeout=_int("AGENT_TIMEOUT", 120),
             max_tokens=_int("AGENT_MAX_TOKENS", 256),
             temperature=_float("AGENT_TEMPERATURE", 0.4),
+            chat_temperature=_float("CHAT_TEMPERATURE", 0.7),
+            intent_llm=_bool("INTENT_LLM", False),
         ),
         memory=MemorySettings(
             enabled=_bool("MEMORY_ENABLED", True),

@@ -12,7 +12,7 @@ def test_coordinator_routes_calculation_to_tool():
     result = coordinator.run("Calculate 123 * 456")
 
     assert result.status is AgentStatus.COMPLETE
-    assert result.output == "56088"
+    assert result.output == "123 × 456 = 56,088"
 
 
 def test_coordinator_routes_coding_to_agent():
@@ -105,7 +105,7 @@ def test_coordinator_calculates_natural_multiplication():
     )
 
     assert result.status is AgentStatus.COMPLETE
-    assert result.output == "1000"
+    assert result.output == "25 × 40 = 1,000"
 
 
 def test_coordinator_passes_science_result_through_inference():
@@ -126,19 +126,12 @@ def test_coordinator_passes_science_result_through_inference():
     )
 
     assert result.status is AgentStatus.COMPLETE
-    assert result.agent_name == "inference"
-    assert (
-        result.output
-        == "72 kilometres per hour is exactly 20 metres per second."
-    )
-
-    combined = "\n".join(
-        message["content"]
-        for message in captured["messages"]
-    )
-
-    assert "unit_conversion" in combined
-    assert "20.0" in combined
+    # Exact results are phrased deterministically: instant, and the model
+    # can never restate the numbers wrongly.
+    assert result.agent_name == "unit_convert"
+    assert result.output.startswith("72 ")
+    assert " is 20 " in result.output
+    assert "messages" not in captured
 
 
 def _chat_coordinator(tmp_path):
@@ -235,4 +228,4 @@ def test_coordinator_stream_reports_failure_and_non_chat_routes(tmp_path):
     # tool routes are not streamed: a single final event
     tool = list(coordinator.stream("Calculate 25 * 40"))
     assert [e["type"] for e in tool] == ["final"]
-    assert tool[0]["result"].output == "1000"
+    assert tool[0]["result"].output == "25 × 40 = 1,000"

@@ -184,7 +184,6 @@ The current configuration is driven by `.env`:
 ```ini
 # SALLY
 SALLY_NAME=SALLY
-SALLY_VERSION=0.2.3
 
 # LLM
 LLM_MODEL_PATH=models/llama-3.2-1b-instruct-q4_k_m.gguf

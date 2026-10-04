@@ -62,10 +62,28 @@ AGENT_GUIDE: tuple[dict[str, object], ...] = (
     },
 )
 
+MEMORY_GUIDE: dict[str, object] = {
+    "description": (
+        "Tell SALLY about yourself in plain sentences and she remembers it. "
+        "She only saves what you say outright, never guesses, and you can "
+        "delete anything on the Memory page."
+    ),
+    # Safe to click: these only read memory.
+    "examples": ("What's my name?", "What do you know about me?"),
+    # Templates to say in your own words (clicking them would overwrite facts).
+    "say": (
+        "My name is …",
+        "I live in …",
+        "I work as …",
+        "I love …",
+        "Remember that my sister's birthday is May 3",
+    ),
+}
+
 TIPS: tuple[str, ...] = (
-    "Just talk: anything that is not a tool or agent request is answered "
-    "conversationally, and SALLY remembers the recent messages of a "
-    "conversation.",
+    "No commands needed: just write the way you would to a person. SALLY "
+    "recognises calculations, times, conversions, machine questions and "
+    "things worth remembering on her own.",
     "Tools give exact answers instantly. Agents take longer because they "
     "work in several steps.",
     "Press Enter to send and Shift + Enter for a new line. The stop button "
@@ -92,6 +110,11 @@ def help_topics(registry) -> dict[str, object]:
         )
 
     return {
+        "memory": {
+            **MEMORY_GUIDE,
+            "examples": list(MEMORY_GUIDE["examples"]),
+            "say": list(MEMORY_GUIDE["say"]),
+        },
         "tools": tools,
         "agents": [
             {**agent, "examples": list(agent["examples"])}

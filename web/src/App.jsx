@@ -19,9 +19,9 @@ const CLEANUP_KEY = "sally-legacy-cache-cleaned-v1";
 const REFRESH_MS = 30000;
 
 const STARTERS = [
-  "Calculate 25 × 40",
   "What time is it?",
-  "Convert 5 miles to kilometers",
+  "How is my machine doing?",
+  "What do you know about me?",
 ];
 
 function getUserId() {
@@ -65,10 +65,20 @@ function formatRuntime(value) {
   return String(value);
 }
 
-// "chat → conversation (0.70): reason" -> "chat · conversation"
+// "tool → calculator (0.95): reason" -> a short, human label.
+// Plain conversation gets no label at all.
 function routeLabel(route) {
   if (!route) return "";
-  return route.split(" (")[0].replace(" → ", " · ");
+
+  const [kind, rest = ""] = route.split(" → ");
+  const target = rest.split(" (")[0];
+
+  if (kind === "chat") return "";
+  if (kind === "memory") return target === "save" ? "Saved to memory" : "From memory";
+  if (kind === "tool") return `Used ${target.replace(/_/g, " ")}`;
+  if (kind === "agent") return `${target.charAt(0).toUpperCase()}${target.slice(1)} agent`;
+
+  return `${kind} · ${target}`;
 }
 
 function formatElapsed(ms) {
@@ -820,7 +830,10 @@ function App() {
               {messages.length === 0 && !busy ? (
                 <div className="hello">
                   <h1>Good to see you.</h1>
-                  <p>Ask a question, run a calculation, or just talk.</p>
+                  <p>
+                    Just talk to me. I'll work out when you're chatting, asking
+                    for something exact, or telling me something to remember.
+                  </p>
                   <div className="starters">
                     {STARTERS.map((prompt) => (
                       <button key={prompt} onClick={() => sendMessage(prompt)}>
@@ -859,7 +872,9 @@ function App() {
                           {!item.streaming && (
                             <div className="meta">
                               <span>{formatTime(item.created_at)}</span>
-                              {item.route && <span>{routeLabel(item.route)}</span>}
+                              {routeLabel(item.route) && (
+                                <span className="tag">{routeLabel(item.route)}</span>
+                              )}
                               {item.elapsed_ms != null && (
                                 <span>{formatElapsed(item.elapsed_ms)}</span>
                               )}
@@ -1139,12 +1154,40 @@ function App() {
               <section className="help">
                 <h2>Just talk</h2>
                 <p>
-                  Anything that isn't a tool or agent request is answered in
-                  conversation, and SALLY keeps the recent messages of the
-                  conversation in mind. Free conversation runs on a small local
-                  model, so double-check facts that matter.
+                  No commands needed. Write the way you would to a person and
+                  SALLY works out whether you're chatting, asking for something
+                  exact, or telling her something to remember. Free
+                  conversation runs on a small local model, so double-check
+                  facts that matter.
                 </p>
               </section>
+
+              {helpData.memory && (
+                <section className="help">
+                  <h2>
+                    Memory <small>she remembers what you tell her</small>
+                  </h2>
+                  <p>{helpData.memory.description}</p>
+                  <p className="say-label">Say it your way, for example:</p>
+                  <ul className="say">
+                    {helpData.memory.say.map((phrase) => (
+                      <li key={phrase}>{phrase}</li>
+                    ))}
+                  </ul>
+                  <div className="examples">
+                    {helpData.memory.examples.map((example) => (
+                      <button
+                        key={example}
+                        className="example"
+                        onClick={() => tryExample(example)}
+                        disabled={busy}
+                      >
+                        {example}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               <section className="help">
                 <h2>

@@ -67,7 +67,6 @@ def test_every_registered_tool_has_examples():
 @pytest.mark.parametrize(
     "text",
     [
-        "What is my name?",
         "How are you?",
         "Tell me about memory in humans",
         "What is the capital of France?",
@@ -140,3 +139,23 @@ def test_machine_status_tool_answer_is_formatted_text(monkeypatch, tmp_path):
     assert result.agent_name == "machine_status"
     assert result.output.startswith("Machine status at 10:00:00")
     assert "Battery: not available" in result.output
+
+
+def test_memory_help_examples_route_to_memory_and_are_safe_to_click():
+    router = create_router()
+
+    for example in help_module.MEMORY_GUIDE["examples"]:
+        route = router.route(example)
+        assert route.route_type is RouteType.MEMORY and route.target == "recall", example
+
+    # Statement templates are not clickable examples (clicking would overwrite
+    # what SALLY knows), so the clickable list must only ever read memory.
+    assert all("?" in e for e in help_module.MEMORY_GUIDE["examples"])
+
+
+def test_help_endpoint_includes_memory_guide():
+    client = TestClient(web.app, client=("127.0.0.1", 5000))
+
+    memory = client.get("/help").json()["memory"]
+
+    assert memory["examples"] and memory["say"]

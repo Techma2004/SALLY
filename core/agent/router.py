@@ -4,11 +4,18 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
+from core.agent.understanding import (
+    extract_memory_notes,
+    is_pure_disclosure,
+    recall_kind,
+)
+
 
 class RouteType(str, Enum):
     TOOL = "tool"
     AGENT = "agent"
     CHAT = "chat"
+    MEMORY = "memory"
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,25 @@ class TaskRouter:
 
     def route(self, objective: str) -> Route:
         text = objective.strip().lower()
+
+        original = objective.strip()
+        notes = extract_memory_notes(original)
+
+        if notes and is_pure_disclosure(original):
+            return Route(
+                RouteType.MEMORY,
+                "save",
+                0.95,
+                "The user shared something worth remembering.",
+            )
+
+        if recall_kind(original):
+            return Route(
+                RouteType.MEMORY,
+                "recall",
+                0.95,
+                "The user asked about what SALLY knows about them.",
+            )
 
         if not text:
             return Route(

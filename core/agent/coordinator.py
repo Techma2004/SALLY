@@ -6,10 +6,11 @@ from threading import Event
 from uuid import uuid4
 
 from core.agent.inference import InferenceEngine
-from core.memory import MemoryManager
+from core.memory import MemoryManager, MemoryType
 from core.tools import create_tool_registry
 from core.tools.calculator import natural_expression
 
+from .phrasing import phrase_tool_answer
 from .registry import AgentRegistry, create_default_registry
 from .router import RouteType, TaskRouter, create_router
 from .runtime import AgentRuntime
@@ -47,6 +48,19 @@ class Coordinator:
         self.memory = memory or MemoryManager()
         self.inference = inference or InferenceEngine()
 
+    def _route(self, objective: str):
+        route = self.router.route(objective)
+
+        if route.route_type is RouteType.CHAT:
+            from core.config import settings
+
+            if settings.agent.intent_llm and len(objective) <= 400:
+                from core.agent.intent_llm import classify
+
+                return classify(objective) or route
+
+        return route
+
     def choose_agent(self, objective: str) -> str:
         route = self.router.route(objective)
 
@@ -75,7 +89,10 @@ class Coordinator:
         context: dict | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> AgentResult:
-        route = self.router.route(objective)
+        route = self._route(objective)
+
+        if route.route_type is RouteType.MEMORY:
+            return self._memory_route(route.target, objective)
 
         if route.route_type is RouteType.TOOL:
             result = self.runtime.tools.execute(
@@ -88,6 +105,13 @@ class Coordinator:
                     ),
                 )
             )
+
+            if not result.success and route.reason.startswith("LLM"):
+                return self._chat(
+                    objective,
+                    history=history,
+                    memories=self._chat_memories(objective),
+                )
 
             if not result.success:
                 return AgentResult(
@@ -119,6 +143,23 @@ class Coordinator:
                 tool_result=result,
                 output=str(result.output),
             )
+
+            phrased = phrase_tool_answer(
+                route.target,
+                objective,
+                self._tool_arguments(route.target, objective, context),
+                result.output,
+            )
+
+            if phrased is not None:
+                return AgentResult(
+                    task_id="tool-" + route.target,
+                    agent_name=route.target,
+                    status=AgentStatus.COMPLETE,
+                    output=phrased,
+                    steps=1,
+                    history=[tool_step, observation],
+                )
 
             if self.runtime.tools.requires_inference(route.target):
                 combined_context = dict(context or {})
@@ -180,14 +221,10 @@ class Coordinator:
             )
 
         if route.route_type is RouteType.CHAT:
-            memories = self._memory_context(objective).get(
-                "relevant_memories",
-                "",
-            )
             return self._chat(
                 objective,
                 history=history,
-                memories=memories,
+                memories=self._chat_memories(objective),
             )
 
         spec = self.registry.get(route.target)
@@ -202,6 +239,75 @@ class Coordinator:
             spec,
             objective,
             context=combined_context,
+        )
+
+    def _chat_memories(self, objective: str) -> str:
+        """Who the user is (always) plus anything relevant to this message."""
+        recent = self.memory.recent(limit=50)
+        profile = [m for m in recent if m.memory_type is MemoryType.PROFILE]
+
+        lines: list[str] = []
+
+        for memory in profile[:5] + self.memory.search(objective, limit=5):
+            line = f"- {memory.content}"
+
+            if line not in lines:
+                lines.append(line)
+
+        return "\n".join(lines)
+
+    def _memory_route(self, target: str, objective: str) -> AgentResult:
+        from core.agent.understanding import (
+            acknowledgement,
+            answer_recall,
+            extract_memory_notes,
+            recall_kind,
+        )
+
+        if target == "recall":
+            answer = answer_recall(
+                recall_kind(objective) or "about",
+                self.memory.recent(limit=50),
+            )
+
+            return AgentResult(
+                task_id=f"memory-{uuid4().hex[:12]}",
+                agent_name="memory",
+                status=AgentStatus.COMPLETE,
+                output=answer,
+                steps=1,
+                history=[],
+            )
+
+        notes = extract_memory_notes(objective)
+        existing = {m.content.lower(): m for m in self.memory.recent(limit=50)}
+        replaced_name = False
+
+        for note in notes:
+            if note.kind == "name":
+                for memory in existing.values():
+                    if memory.content.startswith("The user's name is"):
+                        replaced_name = (
+                            memory.content.lower() != note.content.lower()
+                        )
+                        self.memory.forget(memory.id)
+
+            if note.content.lower() in existing and note.kind != "name":
+                continue
+
+            self.memory.remember(
+                note.content,
+                memory_type=note.memory_type,
+                importance=note.importance,
+            )
+
+        return AgentResult(
+            task_id=f"memory-{uuid4().hex[:12]}",
+            agent_name="memory",
+            status=AgentStatus.COMPLETE,
+            output=acknowledgement(notes, replaced_name),
+            steps=1,
+            history=[],
         )
 
     @staticmethod
@@ -221,15 +327,19 @@ class Coordinator:
         memories: str = "",
     ) -> list[dict[str, str]]:
         system_prompt = (
-            "You are SALLY, a friendly, intelligent and helpful "
-            "AI assistant. Respond naturally and directly. "
-            "Do not output JSON or action objects unless explicitly asked. "
-            "Do not claim to perform actions you cannot perform."
+            "You are SALLY, a warm, sharp personal assistant running "
+            "privately on the user's own machine. Talk like a thoughtful "
+            "friend: natural, direct and brief (1 to 4 sentences unless asked "
+            "for more), with no disclaimers and no lists unless useful. "
+            "If you don't know something, say so plainly. Never claim to have "
+            "done something you haven't. The user can ask you for exact maths, "
+            "the time and date, unit conversions, physics constants, this "
+            "machine's status, and to remember things about them."
         )
 
         if memories:
             system_prompt += (
-                "\n\nThings you know about the user:\n" + memories[:800]
+                "\n\nWhat you know about the user:\n" + memories[:800]
             )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -282,7 +392,7 @@ class Coordinator:
             answer = llm_chat(
                 messages,
                 max_tokens=settings.agent.max_tokens,
-                temperature=settings.agent.temperature,
+                temperature=settings.agent.chat_temperature,
                 timeout_s=settings.agent.timeout,
             ).strip()
         except Exception as exc:
@@ -311,7 +421,7 @@ class Coordinator:
         Tool and agent routes are not streamed; they yield only the final
         event.
         """
-        route = self.router.route(objective)
+        route = self._route(objective)
 
         if route.route_type is not RouteType.CHAT:
             yield {
@@ -327,14 +437,10 @@ class Coordinator:
         from core import llm as llm_module
         from core.config import settings
 
-        memories = self._memory_context(objective).get(
-            "relevant_memories",
-            "",
-        )
         messages = self._chat_messages(
             objective,
             history=history,
-            memories=memories,
+            memories=self._chat_memories(objective),
         )
 
         parts: list[str] = []
@@ -343,7 +449,7 @@ class Coordinator:
             for delta in llm_module.stream_chat(
                 messages,
                 max_tokens=settings.agent.max_tokens,
-                temperature=settings.agent.temperature,
+                temperature=settings.agent.chat_temperature,
                 timeout_s=settings.agent.timeout,
                 cancel=cancel,
             ):

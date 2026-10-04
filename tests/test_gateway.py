@@ -63,7 +63,7 @@ def test_gateway_uses_default_safe_tools():
     )
 
     assert response.status.value == "complete"
-    assert response.answer == "1000"
+    assert response.answer == "25 × 40 = 1,000"
 
 
 def test_gateway_chat_forwards_history():

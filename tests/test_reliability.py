@@ -20,7 +20,7 @@ def test_natural_chained_arithmetic():
     )
 
     assert result.status is AgentStatus.COMPLETE
-    assert result.output == "-2983.85"
+    assert result.output == "That comes to -2,983.85."
 
 
 def test_natural_addition():
@@ -29,7 +29,7 @@ def test_natural_addition():
     result = coordinator.run("add 4 and 45")
 
     assert result.status is AgentStatus.COMPLETE
-    assert result.output == "49"
+    assert result.output == "4 + 45 = 49"
 
 
 def test_relative_arithmetic_follow_up():
@@ -41,7 +41,7 @@ def test_relative_arithmetic_follow_up():
         source="test",
     )
 
-    assert first.answer == "3115"
+    assert first.answer == "(45 × 67) + 100 = 3,115"
 
     second = gateway.handle(
         "divide by 56",
@@ -49,7 +49,7 @@ def test_relative_arithmetic_follow_up():
         source="test",
     )
 
-    assert second.answer == "55.625"
+    assert second.answer == "3115 ÷ 56 = 55.625"
 
 
 def test_natural_unit_question_parsing():

@@ -80,9 +80,19 @@ class Gateway:
             result.status is AgentStatus.COMPLETE
             and result.agent_name == "calculator"
         ):
+            # The answer is phrased for people; follow-ups need the raw number.
+            raw = next(
+                (
+                    step.tool_result.output
+                    for step in result.history
+                    if getattr(step, "tool_result", None) is not None
+                ),
+                result.output,
+            )
+
             try:
-                float(result.output)
-                self._remember_last_result(user_id, result.output)
+                float(raw)
+                self._remember_last_result(user_id, str(raw))
             except (TypeError, ValueError):
                 pass
 
