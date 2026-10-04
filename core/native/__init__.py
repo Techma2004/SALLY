@@ -1,5 +1,6 @@
 from .system import (
     cpu_percent,
+    describe_machine,
     disk_status,
     machine_status,
     network_status,
@@ -8,6 +9,7 @@ from .system import (
 
 __all__ = [
     "cpu_percent",
+    "describe_machine",
     "disk_status",
     "machine_status",
     "network_status",

@@ -115,3 +115,60 @@ def machine_status() -> dict[str, Any]:
         "battery": battery,
         "uptime_seconds": int(raw["uptime_seconds"]),
     }
+
+
+def _duration(seconds: int) -> str:
+    days, rest = divmod(max(0, seconds), 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+
+    parts = []
+    if days:
+        parts.append(f"{days} d")
+    if hours:
+        parts.append(f"{hours} h")
+    parts.append(f"{minutes} min")
+
+    return " ".join(parts)
+
+
+def describe_machine(status: dict[str, Any]) -> str:
+    """Turn machine_status() into a short, accurate, human-readable report."""
+    memory = status["memory"]
+    percent = round(100 * memory["used_mb"] / memory["total_mb"])
+
+    lines = [
+        f"Machine status at {status['time']} "
+        f"({status['platform']} {status['architecture']})",
+        f"CPU: {status['cpu']['percent']}% busy across "
+        f"{status['cpu']['cores']} cores",
+        f"Memory: {memory['used_mb']} / {memory['total_mb']} MB ({percent}%)",
+    ]
+
+    for disk in status.get("disks", []):
+        free = round(disk["total_gb"] - disk["used_gb"], 1)
+        lines.append(
+            f"Disk {disk['mount']}: {disk['percent']}% of "
+            f"{disk['total_gb']} GB used ({free} GB free)"
+        )
+
+    network = status.get("network")
+    if network:
+        lines.append(
+            f"Network since boot: {network['received_mb']} MB received, "
+            f"{network['transmitted_mb']} MB sent"
+        )
+
+    battery = status["battery"]
+    if battery["available"]:
+        remaining = battery.get("remaining_minutes")
+        extra = f", about {remaining} min left" if remaining else ""
+        lines.append(
+            f"Battery: {battery['percent']}% ({battery['status']}{extra})"
+        )
+    else:
+        lines.append("Battery: not available on this machine")
+
+    lines.append(f"Uptime: {_duration(status['uptime_seconds'])}")
+
+    return "\n".join(lines)

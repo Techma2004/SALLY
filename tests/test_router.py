@@ -127,3 +127,19 @@ def test_router_keyword_matching_uses_word_boundaries():
     assert router.route("Write tests for the router").target == "testing"
     assert router.route("Debug this Python function").target == "coding"
     assert router.route("Plan SALLY development").target == "planning"
+
+
+def test_calculator_understands_prefixed_natural_phrases():
+    from core.agent.coordinator import Coordinator
+    from core.tools import calculate
+
+    for text, expected in (
+        ("What is 144 divided by 12?", "12.0"),
+        ("What is 6 times 7?", "42"),
+        ("How much is 10 plus 5?", "15"),
+        ("Calculate 25 * 40", "1000"),
+    ):
+        expression = Coordinator._tool_arguments("calculator", text, {})[
+            "expression"
+        ]
+        assert calculate(expression) == expected, text

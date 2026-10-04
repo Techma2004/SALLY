@@ -171,7 +171,7 @@ class Coordinator:
                 task_id="tool-" + route.target,
                 agent_name=route.target,
                 status=AgentStatus.COMPLETE,
-                output=str(result.output),
+                output=self._format_tool_output(route.target, result.output),
                 steps=1,
                 history=[
                     tool_step,
@@ -203,6 +203,15 @@ class Coordinator:
             objective,
             context=combined_context,
         )
+
+    @staticmethod
+    def _format_tool_output(name: str, output: object) -> str:
+        if name == "machine_status" and isinstance(output, dict):
+            from core.native import describe_machine
+
+            return describe_machine(output)
+
+        return str(output)
 
     def _chat_messages(
         self,
@@ -476,7 +485,10 @@ class Coordinator:
 
         for prefix in direct_prefixes:
             if lowered.startswith(prefix):
-                return text[len(prefix):].strip().rstrip("?.!")
+                remainder = text[len(prefix):].strip().rstrip("?.!")
+
+                # "What is 144 divided by 12?" -> "(144) / (12)"
+                return natural_expression(remainder) or remainder
 
         expression = natural_expression(text)
 

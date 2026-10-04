@@ -46,6 +46,17 @@ class TaskRouter:
         r"\bdate today\b",
     )
 
+    _MACHINE_PATTERNS = (
+        r"\bhow(?:'s| is| are)\b.*\b(?:my|the)\s+"
+        r"(?:machine|computer|laptop|pc|system|phone|device)\b",
+        r"\b(?:machine|system|device|computer|pc|laptop)\s+"
+        r"(?:status|health|stats|info|information|usage)\b",
+        r"\b(?:cpu|ram|uptime|battery)\b",
+        r"\b(?:memory|storage|disk)\s+(?:usage|space|left|free)\b",
+        r"\bhow much\s+(?:ram|memory|storage|disk|battery|space)\b",
+        r"\b(?:network|internet)\s+(?:usage|traffic|stats|status)\b",
+    )
+
     _UNIT_CONVERSION_PATTERNS = (
         r"\bconvert\b.*\b(?:to|into|in)\b",
         r"\b(?:km/h|mph|m/s|kg|mg|g|ms|millisecond|milliseconds|"
@@ -137,6 +148,14 @@ class TaskRouter:
                 "datetime",
                 0.95,
                 "Detected a date/time request.",
+            )
+
+        if self._matches(self._MACHINE_PATTERNS, text):
+            return Route(
+                RouteType.TOOL,
+                "machine_status",
+                0.95,
+                "Detected a machine status request.",
             )
 
         if self._matches(self._UNIT_CONVERSION_PATTERNS, text):

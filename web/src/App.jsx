@@ -240,6 +240,9 @@ function App() {
   const [memories, setMemories] = useState([]);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+  const [helpData, setHelpData] = useState(null);
+  const [menuIndex, setMenuIndex] = useState(0);
+  const [menuDismissed, setMenuDismissed] = useState(false);
   const [theme, setTheme] = useState(
     () => localStorage.getItem("sally-theme") || "light"
   );
@@ -471,6 +474,15 @@ function App() {
     if (view === "system") refreshStatus().catch((err) => setError(err.message));
   }, [view]);
 
+  // Help page content comes from the backend, so it always matches the tools.
+  useEffect(() => {
+    if (view !== "help" || helpData) return;
+
+    api("/help")
+      .then(setHelpData)
+      .catch((err) => setError(err.message));
+  }, [view, helpData]);
+
   // Memory view: load on open and (debounced) while typing a search.
   useEffect(() => {
     if (view !== "memory") return undefined;
@@ -636,7 +648,47 @@ function App() {
     ["memory", "Memory"],
     ["tools", "Tools"],
     ["system", "System"],
+    ["help", "Help"],
   ];
+
+  const commands = [
+    { name: "help", hint: "What SALLY can do and how to ask", run: () => setView("help") },
+    { name: "new", hint: "Start a new conversation", run: newConversation },
+    { name: "history", hint: "Open conversation history", run: () => setSidebarOpen(true) },
+    { name: "memory", hint: "See and manage what SALLY remembers", run: () => setView("memory") },
+    { name: "tools", hint: "List the tools SALLY can use", run: () => setView("tools") },
+    { name: "system", hint: "Model and machine details", run: () => setView("system") },
+    {
+      name: "theme",
+      hint: "Switch between light and dark",
+      run: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
+    },
+  ];
+
+  const slashQuery =
+    view === "chat" && /^\/[a-z]*$/i.test(message)
+      ? message.slice(1).toLowerCase()
+      : null;
+  const menuItems =
+    slashQuery === null
+      ? []
+      : commands.filter((command) => command.name.startsWith(slashQuery));
+  const menuOpen = menuItems.length > 0 && !menuDismissed;
+  const activeIndex = Math.min(menuIndex, Math.max(0, menuItems.length - 1));
+
+  const runCommand = (command) => {
+    setMessage("");
+    setMenuIndex(0);
+    command.run();
+  };
+
+  const tryExample = (example) => {
+    setView("chat");
+    sendMessage(example);
+  };
+
+  const prettyName = (name) =>
+    name.replace(/_/g, " ").replace(/^./, (char) => char.toUpperCase());
 
   const stateLabel =
     online === false ? "Offline" : health?.status === "ok" ? "Ready" : "Connecting";
@@ -776,6 +828,9 @@ function App() {
                       </button>
                     ))}
                   </div>
+                  <button className="linkish" onClick={() => setView("help")}>
+                    See everything SALLY can do →
+                  </button>
                 </div>
               ) : (
                 <>
@@ -837,12 +892,74 @@ function App() {
           </div>
 
           <div className="dock">
+            {menuOpen && (
+              <ul className="slash" role="listbox" aria-label="Commands">
+                {menuItems.map((command, index) => (
+                  <li
+                    key={command.name}
+                    role="option"
+                    aria-selected={index === activeIndex}
+                  >
+                    <button
+                      className={index === activeIndex ? "on" : ""}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        runCommand(command);
+                      }}
+                    >
+                      <code>/{command.name}</code>
+                      <span>{command.hint}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="composer">
               <textarea
                 ref={textareaRef}
                 value={message}
-                onChange={(event) => setMessage(event.target.value)}
+                onChange={(event) => {
+                  setMessage(event.target.value);
+                  setMenuIndex(0);
+                  setMenuDismissed(false);
+                }}
                 onKeyDown={(event) => {
+                  if (menuOpen) {
+                    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                      event.preventDefault();
+                      const step = event.key === "ArrowDown" ? 1 : -1;
+                      setMenuIndex(
+                        (activeIndex + step + menuItems.length) % menuItems.length
+                      );
+                      return;
+                    }
+
+                    if (event.key === "Enter" || event.key === "Tab") {
+                      event.preventDefault();
+                      runCommand(menuItems[activeIndex]);
+                      return;
+                    }
+
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setMenuDismissed(true);
+                      return;
+                    }
+                  }
+
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    slashQuery !== null &&
+                    menuItems.length === 0
+                  ) {
+                    event.preventDefault();
+                    setError(
+                      `Unknown command "/${slashQuery}". Type / to see the commands.`
+                    );
+                    return;
+                  }
+
                   if (
                     event.key === "Enter" &&
                     !event.shiftKey &&
@@ -877,7 +994,7 @@ function App() {
               )}
             </div>
             <p className="hint">
-              Enter to send · Shift + Enter for a new line · SALLY can make mistakes
+              Enter to send · Shift + Enter for a new line · Type / for commands
             </p>
           </div>
         </main>
@@ -1007,6 +1124,125 @@ function App() {
           >
             Refresh
           </button>
+        </main>
+      )}
+
+      {view === "help" && (
+        <main className="page">
+          <h1>How to use SALLY</h1>
+          <p className="muted">Click any example to try it right away.</p>
+
+          {!helpData ? (
+            <p className="empty">Loading…</p>
+          ) : (
+            <>
+              <section className="help">
+                <h2>Just talk</h2>
+                <p>
+                  Anything that isn't a tool or agent request is answered in
+                  conversation, and SALLY keeps the recent messages of the
+                  conversation in mind. Free conversation runs on a small local
+                  model, so double-check facts that matter.
+                </p>
+              </section>
+
+              <section className="help">
+                <h2>
+                  Tools <small>instant, exact answers</small>
+                </h2>
+                <ul className="list">
+                  {helpData.tools.map((tool) => (
+                    <li key={tool.name}>
+                      <div>
+                        <p>
+                          <strong>{prettyName(tool.name)}</strong>
+                        </p>
+                        <small>{tool.description}</small>
+                        <div className="examples">
+                          {tool.examples.map((example) => (
+                            <button
+                              key={example}
+                              className="example"
+                              onClick={() => tryExample(example)}
+                              disabled={busy}
+                            >
+                              {example}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="help">
+                <h2>
+                  Agents <small>several steps, so slower</small>
+                </h2>
+                <ul className="list">
+                  {helpData.agents.map((agent) => (
+                    <li key={agent.name}>
+                      <div>
+                        <p>
+                          <strong>{agent.title}</strong>
+                        </p>
+                        <small>{agent.description}</small>
+                        <div className="examples">
+                          {agent.examples.map((example) => (
+                            <button
+                              key={example}
+                              className="example"
+                              onClick={() => tryExample(example)}
+                              disabled={busy}
+                            >
+                              {example}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="help">
+                <h2>
+                  Commands <small>type / in the message box</small>
+                </h2>
+                <ul className="list">
+                  {commands.map((command) => (
+                    <li key={command.name}>
+                      <div>
+                        <p>
+                          <code className="inline-code">/{command.name}</code>
+                        </p>
+                        <small>{command.hint}</small>
+                      </div>
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          setView("chat");
+                          command.run();
+                        }}
+                      >
+                        Run
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="help">
+                <h2>Tips</h2>
+                <ul className="tips">
+                  {helpData.tips.map((tip) => (
+                    <li key={tip}>{tip}</li>
+                  ))}
+                </ul>
+              </section>
+            </>
+          )}
         </main>
       )}
     </div>

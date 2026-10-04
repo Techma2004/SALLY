@@ -352,6 +352,13 @@ def get_conversation(
     }
 
 
+@app.get("/help", dependencies=_PROTECTED)
+def help_page() -> dict[str, object]:
+    from core.help import help_topics
+
+    return help_topics(gateway.coordinator.runtime.tools)
+
+
 @app.delete("/conversations/{conversation_id}", dependencies=_PROTECTED)
 def delete_conversation(
     conversation_id: str,

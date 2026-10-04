@@ -300,6 +300,7 @@ button:disabled { cursor: default; opacity: 0.45; }
 /* ---------- composer ---------- */
 
 .dock {
+  position: relative;
   width: min(720px, 100%);
   margin: 0 auto;
   padding: 6px 16px calc(10px + env(safe-area-inset-bottom));
@@ -411,3 +412,54 @@ button:disabled { cursor: default; opacity: 0.45; }
   .hint { display: none; }
   .pill { max-width: 92%; }
 }
+
+/* ---------- slash menu + help ---------- */
+
+.slash {
+  position: absolute;
+  right: 16px;
+  bottom: calc(100% - 2px);
+  left: 16px;
+  z-index: 10;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.slash button {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  border-radius: 9px;
+}
+.slash button.on, .slash button:hover { background: var(--accent-soft); }
+.slash code { min-width: 76px; color: var(--accent); font: 600 14px var(--mono); }
+.slash span { overflow: hidden; color: var(--muted); font-size: 14px; white-space: nowrap; text-overflow: ellipsis; }
+
+.linkish { margin-top: 16px; color: var(--accent); font-size: 14px; }
+.linkish:hover { text-decoration: underline; }
+
+.help { margin-top: 28px; }
+.help h2 { margin: 0 0 8px; font: 600 19px var(--serif); }
+.help h2 small { margin-left: 8px; color: var(--muted); font: 400 13px var(--sans); }
+.help > p { margin: 0; color: var(--muted); }
+
+.examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.example {
+  padding: 5px 12px;
+  font-size: 13.5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.example:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+
+.tips { margin: 0; padding-left: 20px; color: var(--muted); }
+.tips li { margin: 6px 0; }
