@@ -19,7 +19,7 @@ _QUESTION_START = re.compile(
     re.IGNORECASE,
 )
 
-_END = r"(?=[.,!?;]|\s+(?:and|but|because|so|though|however)\b|$)"
+_END = r"(?=[.,!?;]|\s+(?:and|but|because|so|though|however|located|which|that)\b|$)"
 _NAME_STOP = {
     "not", "a", "an", "the", "going", "still", "so", "just", "very", "really",
     "sorry", "fine", "good", "here", "tired", "busy", "bored", "ok", "okay",
@@ -32,6 +32,8 @@ _PROFESSIONS = (
 _OBJECT_STOP = {
     "that", "this", "it", "you", "what", "how", "when", "where", "why",
     "who", "the way", "your", "those", "these", "them", "to be honest",
+    # "I love in Calabar" is a typo for "live", not a preference.
+    "in", "at", "on", "from", "of", "for", "with", "by",
 }
 _LIKE_FORMS = {
     "like": "likes", "love": "loves", "enjoy": "enjoys", "prefer": "prefers",
@@ -94,6 +96,24 @@ def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip(" .,!?;:\"'")
 
 
+def _titled(text: str) -> str:
+    return " ".join(w.capitalize() if w.islower() else w for w in text.split(" "))
+
+
+def _tidy_place(raw: str, rest: str) -> str:
+    """'calabar' (+ ' located in Nigeria') -> 'Calabar, Nigeria'."""
+    place = _titled(_clean(raw))
+    extra = re.match(
+        r"\s+(?:located\s+)?in\s+([A-Za-z][A-Za-z .'\-]{1,30}?)\s*(?:[.,!?;]|$)",
+        rest,
+    )
+
+    if extra:
+        place += ", " + _titled(_clean(extra.group(1)))
+
+    return place
+
+
 def _sentence(value: str) -> str:
     value = value.strip()
     return value[0].upper() + value[1:] if value else value
@@ -130,7 +150,7 @@ def extract_memory_notes(text: str) -> list[MemoryNote]:
 
     match = _LIVES.search(text)
     if match:
-        place = _clean(match.group(2))
+        place = _tidy_place(match.group(2), text[match.end():])
         phrase = {
             "live in": "lives in", "stay in": "lives in",
             "come from": "is from", "am from": "is from", "'m from": "is from",
@@ -242,7 +262,7 @@ def answer_recall(kind: str, memories: list[Memory]) -> str:
             )
 
         top = sorted(memories, key=lambda item: item.importance, reverse=True)[:8]
-        lines = "\n".join(f"- {item.content}" for item in top)
+        lines = "\n".join(f"- {item.content[:160]}" for item in top)
 
         return f"Here's what I remember about you:\n{lines}"
 

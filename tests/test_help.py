@@ -70,7 +70,6 @@ def test_every_registered_tool_has_examples():
         "How are you?",
         "Tell me about memory in humans",
         "What is the capital of France?",
-        "Hello there",
     ],
 )
 def test_machine_patterns_do_not_hijack_normal_chat(text):

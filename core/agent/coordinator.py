@@ -94,6 +94,9 @@ class Coordinator:
         if route.route_type is RouteType.MEMORY:
             return self._memory_route(route.target, objective)
 
+        if route.route_type is RouteType.SELF:
+            return self._self_route(route.target, objective, history)
+
         if route.route_type is RouteType.TOOL:
             result = self.runtime.tools.execute(
                 ToolRequest(
@@ -229,6 +232,17 @@ class Coordinator:
 
         spec = self.registry.get(route.target)
 
+        if not spec.allowed_tools:
+            # A text-only specialist: answer in one natural pass with its
+            # persona. (Forcing a small model through JSON mangles code.)
+            return self._chat(
+                objective,
+                history=history,
+                memories=self._chat_memories(objective),
+                persona=spec.system_prompt,
+                agent_name=spec.name,
+            )
+
         combined_context = dict(context or {})
         memory_context = self._memory_context(objective)
 
@@ -241,20 +255,68 @@ class Coordinator:
             context=combined_context,
         )
 
+    @staticmethod
+    def _is_personal(memory) -> bool:
+        """Things the user told SALLY, not logs like daily briefs."""
+        if memory.memory_type in {
+            MemoryType.PROFILE,
+            MemoryType.FACT,
+            MemoryType.PREFERENCE,
+        }:
+            return len(memory.content) <= 300
+
+        return (
+            memory.memory_type not in {MemoryType.DAILY, MemoryType.SESSION}
+            and len(memory.content) <= 200
+        )
+
+    def _known_name(self) -> str | None:
+        for memory in self.memory.recent(limit=50):
+            if memory.content.startswith("The user's name is "):
+                return memory.content.rsplit(" is ", 1)[-1].rstrip(".")
+
+        return None
+
     def _chat_memories(self, objective: str) -> str:
         """Who the user is (always) plus anything relevant to this message."""
-        recent = self.memory.recent(limit=50)
+        recent = [m for m in self.memory.recent(limit=50) if self._is_personal(m)]
         profile = [m for m in recent if m.memory_type is MemoryType.PROFILE]
+        relevant = [
+            m for m in self.memory.search(objective, limit=5) if self._is_personal(m)
+        ]
 
         lines: list[str] = []
 
-        for memory in profile[:5] + self.memory.search(objective, limit=5):
+        for memory in profile[:5] + relevant:
             line = f"- {memory.content}"
 
             if line not in lines:
                 lines.append(line)
 
         return "\n".join(lines)
+
+    def _self_route(
+        self,
+        target: str,
+        objective: str,
+        history: list[dict[str, str]] | None,
+    ) -> AgentResult:
+        from core.agent.selfknowledge import answer_self, variant_for
+
+        answer = answer_self(
+            target,
+            name=self._known_name(),
+            variant=variant_for(objective, len(history or [])),
+        )
+
+        return AgentResult(
+            task_id=f"self-{uuid4().hex[:12]}",
+            agent_name="self",
+            status=AgentStatus.COMPLETE,
+            output=answer,
+            steps=1,
+            history=[],
+        )
 
     def _memory_route(self, target: str, objective: str) -> AgentResult:
         from core.agent.understanding import (
@@ -267,7 +329,7 @@ class Coordinator:
         if target == "recall":
             answer = answer_recall(
                 recall_kind(objective) or "about",
-                self.memory.recent(limit=50),
+                [m for m in self.memory.recent(limit=50) if self._is_personal(m)],
             )
 
             return AgentResult(
@@ -319,52 +381,83 @@ class Coordinator:
 
         return str(output)
 
+    _BASE_PROMPT = (
+        "You are SALLY, a warm, sharp personal assistant running privately "
+        "on the user's own machine. Talk like a thoughtful friend: natural, "
+        "direct and brief (1 to 4 sentences unless asked for more), with no "
+        "disclaimers and no lists unless useful. If you don't know "
+        "something, say so plainly. Never claim to have done something you "
+        "haven't, and never invent abilities: you can only do exact maths, "
+        "tell the time and date, convert units, look up physics constants, "
+        "report this machine's status, and remember what the user tells you."
+    )
+
+    # Keep the prompt small: it is re-read on every message, and on a small
+    # CPU its length is most of the wait.
+    _HISTORY_MESSAGES = 8
+    _HISTORY_CHARS = 2400
+    _MESSAGE_CHARS = 700
+
     def _chat_messages(
         self,
         objective: str,
         *,
         history: list[dict[str, str]] | None = None,
         memories: str = "",
+        persona: str | None = None,
     ) -> list[dict[str, str]]:
-        system_prompt = (
-            "You are SALLY, a warm, sharp personal assistant running "
-            "privately on the user's own machine. Talk like a thoughtful "
-            "friend: natural, direct and brief (1 to 4 sentences unless asked "
-            "for more), with no disclaimers and no lists unless useful. "
-            "If you don't know something, say so plainly. Never claim to have "
-            "done something you haven't. The user can ask you for exact maths, "
-            "the time and date, unit conversions, physics constants, this "
-            "machine's status, and to remember things about them."
-        )
+        system_prompt = self._BASE_PROMPT
+
+        if persona:
+            system_prompt = (
+                f"{persona} You are speaking as SALLY, a personal assistant: "
+                "be practical and concise, and put code in code blocks."
+            )
 
         if memories:
             system_prompt += (
                 "\n\nWhat you know about the user:\n" + memories[:800]
             )
 
-        messages = [{"role": "system", "content": system_prompt}]
+        kept: list[dict[str, str]] = []
+        used = 0
 
-        if history:
-            messages.extend(
-                {"role": item["role"], "content": item["content"]}
-                for item in history[-8:]
-                if item.get("role") in {"user", "assistant"}
-                and item.get("content")
-            )
+        recent = [
+            item
+            for item in (history or [])[-self._HISTORY_MESSAGES:]
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
 
-        messages.append({"role": "user", "content": objective})
+        for item in reversed(recent):
+            content = item["content"]
 
-        return messages
+            if len(content) > self._MESSAGE_CHARS:
+                content = content[: self._MESSAGE_CHARS].rstrip() + "…"
+
+            if used + len(content) > self._HISTORY_CHARS and kept:
+                break
+
+            kept.append({"role": item["role"], "content": content})
+            used += len(content)
+
+        kept.reverse()
+
+        return [
+            {"role": "system", "content": system_prompt},
+            *kept,
+            {"role": "user", "content": objective},
+        ]
 
     @staticmethod
     def _chat_result(
         status: AgentStatus,
         output: str = "",
         error: str | None = None,
+        agent_name: str = "conversation",
     ) -> AgentResult:
         return AgentResult(
             task_id=f"chat-{uuid4().hex[:12]}",
-            agent_name="conversation",
+            agent_name=agent_name,
             status=status,
             output=output,
             steps=1,
@@ -372,12 +465,27 @@ class Coordinator:
             error=error,
         )
 
+    def _persona(self, route) -> tuple[str | None, str]:
+        """(system prompt, result name) for routes answered conversationally."""
+        if route.route_type is RouteType.CHAT:
+            return None, "conversation"
+
+        if route.route_type is RouteType.AGENT:
+            spec = self.registry.get(route.target)
+
+            if not spec.allowed_tools:
+                return spec.system_prompt, spec.name
+
+        return None, "conversation"
+
     def _chat(
         self,
         objective: str,
         *,
         history: list[dict[str, str]] | None = None,
         memories: str = "",
+        persona: str | None = None,
+        agent_name: str = "conversation",
     ) -> AgentResult:
         from core.config import settings
         from core.llm import chat as llm_chat
@@ -386,6 +494,7 @@ class Coordinator:
             objective,
             history=history,
             memories=memories,
+            persona=persona,
         )
 
         try:
@@ -396,15 +505,24 @@ class Coordinator:
                 timeout_s=settings.agent.timeout,
             ).strip()
         except Exception as exc:
-            return self._chat_result(AgentStatus.FAILED, error=str(exc))
+            return self._chat_result(
+                AgentStatus.FAILED,
+                error=str(exc),
+                agent_name=agent_name,
+            )
 
         if not answer:
             return self._chat_result(
                 AgentStatus.FAILED,
                 error="Conversation model produced an empty response.",
+                agent_name=agent_name,
             )
 
-        return self._chat_result(AgentStatus.COMPLETE, answer)
+        return self._chat_result(
+            AgentStatus.COMPLETE,
+            answer,
+            agent_name=agent_name,
+        )
 
     def stream(
         self,
@@ -422,8 +540,9 @@ class Coordinator:
         event.
         """
         route = self._route(objective)
+        persona, agent_name = self._persona(route)
 
-        if route.route_type is not RouteType.CHAT:
+        if persona is None and route.route_type is not RouteType.CHAT:
             yield {
                 "type": "final",
                 "result": self.run(
@@ -441,6 +560,7 @@ class Coordinator:
             objective,
             history=history,
             memories=self._chat_memories(objective),
+            persona=persona,
         )
 
         parts: list[str] = []
@@ -461,6 +581,7 @@ class Coordinator:
                 "result": self._chat_result(
                     AgentStatus.FAILED,
                     error=str(exc),
+                    agent_name=agent_name,
                 ),
             }
             return
@@ -471,9 +592,14 @@ class Coordinator:
             result = self._chat_result(
                 AgentStatus.FAILED,
                 error="Conversation model produced an empty response.",
+                agent_name=agent_name,
             )
         else:
-            result = self._chat_result(AgentStatus.COMPLETE, answer)
+            result = self._chat_result(
+                AgentStatus.COMPLETE,
+                answer,
+                agent_name=agent_name,
+            )
 
         yield {"type": "final", "result": result}
 

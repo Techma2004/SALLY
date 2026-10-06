@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 import argparse
-
 from core.config import settings
 
 

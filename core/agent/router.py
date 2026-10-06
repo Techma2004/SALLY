@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
+from core.agent.selfknowledge import self_kind, smalltalk_kind
 from core.agent.understanding import (
     extract_memory_notes,
     is_pure_disclosure,
@@ -16,6 +17,7 @@ class RouteType(str, Enum):
     AGENT = "agent"
     CHAT = "chat"
     MEMORY = "memory"
+    SELF = "self"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,12 @@ class TaskRouter:
         r"\bwhat time\b",
         r"\bcurrent time\b",
         r"\btime is it\b",
+        r"\b(?:what(?:'s| is)|tell me|got|give me|show me)\s+the time\b"
+        r"(?!\s+(?:complexity|series|travel|management|zone|limit|machine))",
+        r"\bthe time (?:now|right now|please)\b",
+        r"\bwhat(?:'s| is)? (?:the )?day (?:is it|today)\b",
+        r"\bwhat day is it\b",
+        r"\bwhat(?:'s| is) (?:the )?date\b(?!\s+(?:format|picker|object))",
         r"\bwhat date\b",
         r"\btoday'?s date\b",
         r"\bcurrent date\b",
@@ -142,6 +150,19 @@ class TaskRouter:
                 "save",
                 0.95,
                 "The user shared something worth remembering.",
+            )
+
+        kind = smalltalk_kind(original)
+        if kind:
+            return Route(RouteType.SELF, kind, 0.95, "Small talk.")
+
+        kind = self_kind(original)
+        if kind:
+            return Route(
+                RouteType.SELF,
+                kind,
+                0.95,
+                "A question about SALLY herself.",
             )
 
         if recall_kind(original):

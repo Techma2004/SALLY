@@ -73,7 +73,7 @@ function routeLabel(route) {
   const [kind, rest = ""] = route.split(" → ");
   const target = rest.split(" (")[0];
 
-  if (kind === "chat") return "";
+  if (kind === "chat" || kind === "self") return "";
   if (kind === "memory") return target === "save" ? "Saved to memory" : "From memory";
   if (kind === "tool") return `Used ${target.replace(/_/g, " ")}`;
   if (kind === "agent") return `${target.charAt(0).toUpperCase()}${target.slice(1)} agent`;

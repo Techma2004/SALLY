@@ -111,6 +111,24 @@ def _science(output: dict[str, Any]) -> str | None:
         return None
 
 
+def _machine_focus(objective: str) -> str | None:
+    """Which single reading a person asked about, if only one."""
+    text = objective.lower()
+
+    for focus, pattern in (
+        ("disk", r"\b(?:disk|storage|space|drive)\b"),
+        ("memory", r"\b(?:ram|memory)\b"),
+        ("cpu", r"\b(?:cpu|processor)\b"),
+        ("battery", r"\bbattery\b"),
+        ("uptime", r"\buptime\b|\bhow long\b.*\b(?:on|up|running)\b"),
+        ("network", r"\b(?:network|internet|bandwidth|data usage)\b"),
+    ):
+        if re.search(pattern, text):
+            return focus
+
+    return None
+
+
 def phrase_tool_answer(
     tool: str,
     objective: str,
@@ -127,7 +145,7 @@ def phrase_tool_answer(
     if tool == "machine_status" and isinstance(output, dict):
         from core.native import describe_machine
 
-        return describe_machine(output)
+        return describe_machine(output, focus=_machine_focus(objective))
 
     if not isinstance(output, dict):
         return None

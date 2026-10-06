@@ -132,8 +132,60 @@ def _duration(seconds: int) -> str:
     return " ".join(parts)
 
 
-def describe_machine(status: dict[str, Any]) -> str:
-    """Turn machine_status() into a short, accurate, human-readable report."""
+def _describe_focus(status: dict[str, Any], focus: str) -> str | None:
+    memory = status["memory"]
+
+    if focus == "memory":
+        percent = round(100 * memory["used_mb"] / memory["total_mb"])
+        return (
+            f"You're using {memory['used_mb']} of {memory['total_mb']} MB "
+            f"of RAM ({percent}%)."
+        )
+
+    if focus == "cpu":
+        return (
+            f"The CPU is about {status['cpu']['percent']}% busy across "
+            f"{status['cpu']['cores']} cores."
+        )
+
+    if focus == "disk" and status.get("disks"):
+        disk = status["disks"][0]
+        free = round(disk["total_gb"] - disk["used_gb"], 1)
+        return (
+            f"You have {free} GB free on {disk['mount']} "
+            f"({disk['percent']}% of {disk['total_gb']} GB used)."
+        )
+
+    if focus == "battery":
+        battery = status["battery"]
+        if not battery["available"]:
+            return "This machine doesn't report a battery."
+        return f"Battery is at {battery['percent']}% ({battery['status']})."
+
+    if focus == "uptime":
+        return f"This machine has been up for {_duration(status['uptime_seconds'])}."
+
+    if focus == "network" and status.get("network"):
+        network = status["network"]
+        return (
+            f"Since boot: {network['received_mb']} MB received and "
+            f"{network['transmitted_mb']} MB sent."
+        )
+
+    return None
+
+
+def describe_machine(status: dict[str, Any], focus: str | None = None) -> str:
+    """Turn machine_status() into a short, accurate, human-readable report.
+
+    With a focus ("disk", "memory", ...) only that reading is described.
+    """
+    if focus:
+        focused = _describe_focus(status, focus)
+
+        if focused:
+            return focused
+
     memory = status["memory"]
     percent = round(100 * memory["used_mb"] / memory["total_mb"])
 

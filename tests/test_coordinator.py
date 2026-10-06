@@ -15,22 +15,25 @@ def test_coordinator_routes_calculation_to_tool():
     assert result.output == "123 × 456 = 56,088"
 
 
-def test_coordinator_routes_coding_to_agent():
-    responses = iter([
-        '{"action":"final","answer":"Coding task handled."}',
-    ])
+def test_coordinator_routes_coding_to_agent(monkeypatch):
+    seen = {}
 
-    def fake_llm(messages, *, max_tokens=None, temperature=None):
-        return next(responses)
+    def fake_chat(messages, **kwargs):
+        seen["system"] = messages[0]["content"]
+        return "Coding task handled."
 
-    tools = create_tool_registry()
-    runtime = AgentRuntime(tools=tools, llm=fake_llm)
-    coordinator = Coordinator(runtime=runtime)
+    monkeypatch.setattr("core.llm.chat", fake_chat)
+
+    coordinator = Coordinator(
+        runtime=AgentRuntime(tools=create_tool_registry())
+    )
 
     result = coordinator.run("Debug this Python function")
 
+    # Text-only specialists answer in one natural pass with their persona.
     assert result.status is AgentStatus.COMPLETE
     assert result.agent_name == "coding"
+    assert "Coding Agent" in seen["system"]
     assert result.output == "Coding task handled."
 
 
@@ -56,7 +59,7 @@ def test_coordinator_describes_agent_route():
     assert "planning" in description
 
 
-def test_coordinator_passes_relevant_memories_to_agent(tmp_path):
+def test_coordinator_passes_relevant_memories_to_agent(tmp_path, monkeypatch):
     from core.memory import MemoryManager, MemoryStore, MemoryType
 
     memory = MemoryManager(
@@ -72,15 +75,14 @@ def test_coordinator_passes_relevant_memories_to_agent(tmp_path):
 
     captured = {}
 
-    def fake_llm(messages, *, max_tokens=None, temperature=None):
+    def fake_chat(messages, **kwargs):
         captured["messages"] = messages
-        return '{"action":"final","answer":"Memory context received."}'
+        return "Memory context received."
 
-    tools = create_tool_registry()
-    runtime = AgentRuntime(tools=tools, llm=fake_llm)
+    monkeypatch.setattr("core.llm.chat", fake_chat)
 
     coordinator = Coordinator(
-        runtime=runtime,
+        runtime=AgentRuntime(tools=create_tool_registry()),
         memory=memory,
     )
 
@@ -89,6 +91,7 @@ def test_coordinator_passes_relevant_memories_to_agent(tmp_path):
     )
 
     assert result.status is AgentStatus.COMPLETE
+    assert result.agent_name == "planning"
     assert result.output == "Memory context received."
 
     messages = captured["messages"]
@@ -189,7 +192,7 @@ def test_coordinator_chat_uses_memories_and_trimmed_history(
 
 def test_coordinator_chat_reports_llm_failure(tmp_path):
     # conftest blocks the real LLM, so the chat call raises.
-    result = _chat_coordinator(tmp_path).run("Hello there.")
+    result = _chat_coordinator(tmp_path).run("Tell me something interesting.")
 
     assert result.status is AgentStatus.FAILED
     assert result.error
@@ -198,7 +201,7 @@ def test_coordinator_chat_reports_llm_failure(tmp_path):
 def test_coordinator_chat_rejects_empty_reply(tmp_path, monkeypatch):
     monkeypatch.setattr("core.llm.chat", lambda *a, **k: "   ")
 
-    result = _chat_coordinator(tmp_path).run("Hello there.")
+    result = _chat_coordinator(tmp_path).run("Tell me something interesting.")
 
     assert result.status is AgentStatus.FAILED
     assert "empty" in result.error.lower()
@@ -211,7 +214,7 @@ def test_coordinator_stream_yields_tokens_then_final(tmp_path, monkeypatch):
 
     monkeypatch.setattr("core.llm.stream_chat", fake_stream)
 
-    events = list(_chat_coordinator(tmp_path).stream("Hello there."))
+    events = list(_chat_coordinator(tmp_path).stream("Tell me something interesting."))
 
     assert [e["type"] for e in events] == ["token", "token", "final"]
     assert events[-1]["result"].output == "Hi there"
@@ -222,7 +225,7 @@ def test_coordinator_stream_reports_failure_and_non_chat_routes(tmp_path):
     coordinator = _chat_coordinator(tmp_path)
 
     # conftest blocks the real LLM -> failure surfaces as a final event
-    failed = list(coordinator.stream("Hello there."))
+    failed = list(coordinator.stream("Tell me something interesting."))
     assert failed[-1]["result"].status is AgentStatus.FAILED
 
     # tool routes are not streamed: a single final event

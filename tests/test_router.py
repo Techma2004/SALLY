@@ -109,7 +109,7 @@ def test_router_routes_casual_messages_to_chat():
     router = create_router()
 
     for text in (
-        "Hello, what is your name?",
+        "Tell me something interesting.",
         "What is the capital of France?",
         "Get latest news for space tech",
         "Explain the gateway.",
