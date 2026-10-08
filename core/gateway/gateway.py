@@ -32,6 +32,7 @@ class GatewayResponse:
     agent_name: str
     source: str
     error: str | None = None
+    trace: dict | None = None
 
 
 class Gateway:
@@ -103,6 +104,7 @@ class Gateway:
             agent_name=result.agent_name,
             source=source,
             error=result.error,
+            trace=result.trace,
         )
 
     def handle(

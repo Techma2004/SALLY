@@ -1,4 +1,5 @@
 .env
+.env.*.tmp
 settings.json
 models/*.gguf
 models/voices/

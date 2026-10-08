@@ -61,6 +61,8 @@ class AgentSettings:
     chat_temperature: float = 0.7
     # Experimental: let the local model classify messages the rules missed.
     intent_llm: bool = False
+    # Let the model put exact tool/memory results into natural words.
+    narrate_tools: bool = True
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,7 @@ def get_settings() -> Settings:
             temperature=_float("AGENT_TEMPERATURE", 0.4),
             chat_temperature=_float("CHAT_TEMPERATURE", 0.7),
             intent_llm=_bool("INTENT_LLM", False),
+            narrate_tools=_bool("NARRATE_TOOLS", True),
         ),
         memory=MemorySettings(
             enabled=_bool("MEMORY_ENABLED", True),

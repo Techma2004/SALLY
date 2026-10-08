@@ -65,3 +65,5 @@ class AgentResult:
     steps: int = 0
     history: list[AgentStep] = field(default_factory=list)
     error: str | None = None
+    # What actually happened this turn (route, timings, tool, narration).
+    trace: dict | None = None

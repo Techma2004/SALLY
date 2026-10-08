@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,19 +32,30 @@ class MemoryStore:
 
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            self.db_path,
-            timeout=10,
-        )
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Commit on success, roll back on error, and always close.
+
+        (sqlite3's own ``with`` only commits; it never closes the connection.)
+        """
+        connection = sqlite3.connect(self.db_path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
-        connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+
+        try:
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            # WAL is a property of the database file: set it once, not per call.
+            connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS memories (

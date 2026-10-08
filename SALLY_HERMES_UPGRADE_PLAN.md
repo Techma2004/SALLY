@@ -4,7 +4,7 @@
 **Meaning:** Science Artificial Learning Logic And You
 **Developer:** Edima Bassey
 **Repository:** `Techma2004/SALLY`
-**Current Version:** `0.2.3`
+**Current Version:** `0.3.0`
 **Status:** Private Development
 **Primary Runtime:** Python 3.11
 **Native Runtime:** Rust + PyO3

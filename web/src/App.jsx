@@ -71,7 +71,7 @@ function routeLabel(route) {
   if (!route) return "";
 
   const [kind, rest = ""] = route.split(" → ");
-  const target = rest.split(" (")[0];
+  const target = rest.split(/ \(|: /)[0];
 
   if (kind === "chat" || kind === "self") return "";
   if (kind === "memory") return target === "save" ? "Saved to memory" : "From memory";
@@ -226,6 +226,139 @@ function Thinking() {
   );
 }
 
+function TraceDetails({ trace }) {
+  const steps = (trace.phases || [])
+    .map((phase) => `${phase.name} ${Math.round(phase.ms)} ms`)
+    .join(" → ");
+
+  return (
+    <div className="trace">
+      <dl>
+        <div>
+          <dt>Route</dt>
+          <dd>
+            {trace.route?.type} · {trace.route?.target}
+            <small>{trace.route?.reason}</small>
+          </dd>
+        </div>
+        <div>
+          <dt>Timeline</dt>
+          <dd>
+            {steps || "—"} <small>{Math.round(trace.total_ms)} ms total</small>
+          </dd>
+        </div>
+        <div>
+          <dt>Model</dt>
+          <dd>
+            {trace.model_calls} call{trace.model_calls === 1 ? "" : "s"}
+            {trace.narrated ? " · wording by the model, facts checked" : ""}
+          </dd>
+        </div>
+        {(trace.notes || []).length > 0 && (
+          <div>
+            <dt>Notes</dt>
+            <dd>{trace.notes.join(" · ")}</dd>
+          </div>
+        )}
+      </dl>
+      {trace.event && (
+        <>
+          <p className="trace-label">What happened (the JSON the model was given)</p>
+          <pre>{JSON.stringify(trace.event, null, 2)}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SettingField({ field, models, value, onChange }) {
+  const id = `setting-${field.key}`;
+
+  if (field.kind === "bool") {
+    return (
+      <label className="setting-row toggle" htmlFor={id}>
+        <span>
+          <strong>{field.label}</strong>
+          {field.help && <small>{field.help}</small>}
+        </span>
+        <input
+          id={id}
+          type="checkbox"
+          checked={value === "true"}
+          onChange={(event) => onChange(event.target.checked ? "true" : "false")}
+        />
+      </label>
+    );
+  }
+
+  let control;
+
+  if (field.kind === "model") {
+    const listed = models.some((model) => model.path === value);
+
+    control = (
+      <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
+        {!listed && <option value={value}>{value} (not in models folder)</option>}
+        {models.map((model) => (
+          <option key={model.path} value={model.path}>
+            {model.name} · {model.size_gb} GB
+          </option>
+        ))}
+      </select>
+    );
+  } else if (field.kind === "secret") {
+    control = (
+      <span className="secret">
+        <input
+          id={id}
+          type="password"
+          autoComplete="new-password"
+          value={value ?? ""}
+          placeholder={field.configured ? "Configured · type to replace" : "Not set"}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {field.configured && (
+          <button type="button" className="ghost" onClick={() => onChange("")} title="Remove saved value">
+            Remove
+          </button>
+        )}
+      </span>
+    );
+  } else if (field.kind === "int" || field.kind === "float") {
+    control = (
+      <input
+        id={id}
+        type="number"
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  } else {
+    control = (
+      <input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+
+  return (
+    <div className="setting-row">
+      <label htmlFor={id}>
+        <strong>{field.label}</strong>
+        {field.pending && <em className="pending">restart to apply</em>}
+        {field.help && <small>{field.help}</small>}
+      </label>
+      {control}
+    </div>
+  );
+}
+
 function App() {
   const userId = useMemo(getUserId, []);
 
@@ -250,7 +383,13 @@ function App() {
   const [memories, setMemories] = useState([]);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+  const [openDetails, setOpenDetails] = useState(null);
   const [helpData, setHelpData] = useState(null);
+  const [settingsData, setSettingsData] = useState(null);
+  const [draft, setDraft] = useState({});
+  const [settingsNote, setSettingsNote] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [theme, setTheme] = useState(
@@ -493,6 +632,79 @@ function App() {
       .catch((err) => setError(err.message));
   }, [view, helpData]);
 
+  const loadSettings = async () => {
+    const data = await api("/settings");
+    setSettingsData(data);
+    return data;
+  };
+
+  useEffect(() => {
+    if (view !== "settings") return;
+
+    loadSettings().catch((err) => setError(err.message));
+  }, [view]);
+
+  const changeSetting = (key, value) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+
+  const saveSettings = async () => {
+    if (savingSettings || Object.keys(draft).length === 0) return;
+
+    setSavingSettings(true);
+    setSettingsNote("");
+
+    try {
+      const data = await api("/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values: draft }),
+      });
+
+      setSettingsData(data);
+      setDraft({});
+      setError("");
+      setSettingsNote(
+        data.restart_required
+          ? "Saved. Restart SALLY to apply the changes."
+          : "Saved."
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const restartSally = async () => {
+    if (!window.confirm("Restart SALLY now? The page will reload when she is back.")) {
+      return;
+    }
+
+    setRestarting(true);
+
+    try {
+      await api("/settings/restart", { method: "POST" });
+    } catch (err) {
+      setRestarting(false);
+      setError(err.message);
+      return;
+    }
+
+    let down = false;
+
+    const poll = window.setInterval(async () => {
+      try {
+        await api("/health");
+        if (down) {
+          window.clearInterval(poll);
+          window.location.reload();
+        }
+      } catch {
+        down = true;
+      }
+    }, 1500);
+  };
+
   // Memory view: load on open and (debounced) while typing a search.
   useEffect(() => {
     if (view !== "memory") return undefined;
@@ -602,6 +814,7 @@ function App() {
               agent_name: event.agent_name,
               route: event.route,
               elapsed_ms: event.elapsed_ms,
+              trace: event.trace,
             });
           }
         } else if (event.type === "error") {
@@ -658,6 +871,7 @@ function App() {
     ["memory", "Memory"],
     ["tools", "Tools"],
     ["system", "System"],
+    ["settings", "Settings"],
     ["help", "Help"],
   ];
 
@@ -668,6 +882,7 @@ function App() {
     { name: "memory", hint: "See and manage what SALLY remembers", run: () => setView("memory") },
     { name: "tools", hint: "List the tools SALLY can use", run: () => setView("tools") },
     { name: "system", hint: "Model and machine details", run: () => setView("system") },
+    { name: "settings", hint: "Change the model and other settings", run: () => setView("settings") },
     {
       name: "theme",
       hint: "Switch between light and dark",
@@ -691,6 +906,9 @@ function App() {
     setMenuIndex(0);
     command.run();
   };
+
+  const toggleDetails = (id) =>
+    setOpenDetails((current) => (current === id ? null : id));
 
   const tryExample = (example) => {
     setView("chat");
@@ -869,6 +1087,10 @@ function App() {
                             />
                           </div>
 
+                          {openDetails === item.id && item.trace && (
+                            <TraceDetails trace={item.trace} />
+                          )}
+
                           {!item.streaming && (
                             <div className="meta">
                               <span>{formatTime(item.created_at)}</span>
@@ -879,6 +1101,15 @@ function App() {
                                 <span>{formatElapsed(item.elapsed_ms)}</span>
                               )}
                               {item.stopped && <span>Stopped</span>}
+                              {item.trace && (
+                                <button
+                                  className="link"
+                                  onClick={() => toggleDetails(item.id)}
+                                  aria-expanded={openDetails === item.id}
+                                >
+                                  {openDetails === item.id ? "Hide details" : "Details"}
+                                </button>
+                              )}
                               <button
                                 className="link"
                                 onClick={() => copyMessage(item)}
@@ -1139,6 +1370,77 @@ function App() {
           >
             Refresh
           </button>
+        </main>
+      )}
+
+
+      {view === "settings" && (
+        <main className="page">
+          <h1>Settings</h1>
+          <p className="muted">
+            Saved to your <code className="inline-code">.env</code> file. Changes apply after a restart.
+          </p>
+
+          {!settingsData ? (
+            <p className="empty">Loading…</p>
+          ) : (
+            <>
+              {(settingsData.restart_required || settingsNote) && (
+                <div className="restart-banner" role="status">
+                  <span>{settingsNote || "Some saved settings are waiting for a restart."}</span>
+                  {settingsData.restart_required && (
+                    <button className="primary" onClick={restartSally} disabled={restarting}>
+                      {restarting ? "Restarting…" : "Restart now"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {settingsData.groups.map((group) => (
+                <section className="help" key={group.name}>
+                  <h2>{group.name}</h2>
+                  <div className="settings-group">
+                    {group.fields.map((field) => (
+                      <SettingField
+                        key={field.key}
+                        field={field}
+                        models={settingsData.models}
+                        value={draft[field.key] ?? field.value}
+                        onChange={(next) => changeSetting(field.key, next)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+
+              <p className="muted locked-note">
+                Not editable here, for safety: {settingsData.locked.join(", ")}. Edit{" "}
+                <code className="inline-code">.env</code> by hand to change who can reach SALLY.
+              </p>
+
+              <div className="savebar">
+                <span className="muted">
+                  {Object.keys(draft).length
+                    ? `${Object.keys(draft).length} unsaved change${Object.keys(draft).length === 1 ? "" : "s"}`
+                    : "No changes"}
+                </span>
+                <button
+                  className="secondary"
+                  onClick={() => setDraft({})}
+                  disabled={Object.keys(draft).length === 0}
+                >
+                  Discard
+                </button>
+                <button
+                  className="primary"
+                  onClick={saveSettings}
+                  disabled={Object.keys(draft).length === 0 || savingSettings}
+                >
+                  {savingSettings ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </>
+          )}
         </main>
       )}
 

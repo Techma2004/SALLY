@@ -474,3 +474,101 @@ button:disabled { cursor: default; opacity: 0.45; }
 .say-label { margin: 12px 0 4px !important; font-size: 14px; }
 .say { margin: 0 0 10px; padding-left: 20px; color: var(--text); }
 .say li { margin: 3px 0; font-size: 14.5px; }
+
+/* ---------- settings + trace ---------- */
+
+.settings-group { border-top: 1px solid var(--line); }
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--line);
+}
+.setting-row > label, .setting-row.toggle > span { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.setting-row strong { font-weight: 600; }
+.setting-row small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+.setting-row.toggle { cursor: pointer; }
+.setting-row.toggle input { flex: none; width: 20px; height: 20px; accent-color: var(--accent); }
+
+.setting-row input[type="number"], .setting-row input[type="text"],
+.setting-row input[type="password"], .setting-row select {
+  flex: none;
+  width: min(260px, 45%);
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.setting-row select { width: min(320px, 55%); }
+.setting-row .secret { display: flex; flex: none; gap: 6px; width: min(300px, 55%); }
+.setting-row .secret input { width: 100%; }
+.setting-row .secret .ghost { width: auto; padding: 0 10px; font-size: 13px; }
+
+.pending {
+  margin-left: 8px;
+  padding: 0 8px;
+  color: #8a5a00;
+  font: 500 12px var(--sans);
+  font-style: normal;
+  background: #fff1d6;
+  border-radius: 999px;
+}
+:root[data-theme="dark"] .pending { color: #ffd37a; background: #3a2e12; }
+
+.restart-banner {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 10px 12px 10px 16px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+}
+
+.locked-note { margin-top: 24px; font-size: 13px; }
+
+.savebar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 12px 0;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+}
+.savebar .muted { margin-right: auto; font-size: 14px; }
+
+.trace {
+  margin-top: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.trace dl { margin: 0; }
+.trace dl div { display: flex; gap: 12px; padding: 3px 0; }
+.trace dt { flex: none; width: 70px; color: var(--muted); }
+.trace dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.trace dd small { display: block; color: var(--muted); }
+.trace-label { margin: 10px 0 4px; color: var(--muted); }
+.trace pre { margin: 0; padding: 8px 10px; overflow-x: auto; font: 12.5px/1.5 var(--mono); background: var(--surface); border-radius: 8px; }
+
+@media (max-width: 640px) {
+  .setting-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .setting-row.toggle { flex-direction: row; align-items: center; }
+  .setting-row input[type="number"], .setting-row input[type="text"],
+  .setting-row input[type="password"], .setting-row select,
+  .setting-row .secret { width: 100%; }
+}

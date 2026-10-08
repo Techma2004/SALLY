@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
+import time
 from collections.abc import Iterator
+from dataclasses import dataclass, field, replace
 from threading import Event
 from uuid import uuid4
 
@@ -10,10 +11,19 @@ from core.memory import MemoryManager, MemoryType
 from core.tools import create_tool_registry
 from core.tools.calculator import natural_expression
 
+from .narrator import (
+    MAX_EXACT_CHARS,
+    MAX_REPLY_CHARS,
+    json_safe,
+    narration_messages,
+    numbers_to_keep,
+    reply_keeps,
+)
 from .phrasing import phrase_tool_answer
 from .registry import AgentRegistry, create_default_registry
 from .router import RouteType, TaskRouter, create_router
 from .runtime import AgentRuntime
+from .turn import TurnBudget, TurnTrace
 from .types import (
     AgentResult,
     AgentStatus,
@@ -21,6 +31,22 @@ from .types import (
     StepType,
     ToolRequest,
 )
+
+
+@dataclass
+class Outcome:
+    """The exact part of a turn, and what the model may be asked to phrase.
+
+    ``event`` is the JSON-able record of what happened. ``verify`` lists the
+    numbers/names a model rewrite must keep. ``recovers_failure`` marks a
+    failed tool whose friendly explanation may replace the bare error.
+    """
+
+    result: AgentResult
+    event: dict | None = None
+    verify: list[str] = field(default_factory=list)
+    narrate: bool = False
+    recovers_failure: bool = False
 
 
 class Coordinator:
@@ -48,14 +74,21 @@ class Coordinator:
         self.memory = memory or MemoryManager()
         self.inference = inference or InferenceEngine()
 
-    def _route(self, objective: str):
+    def _route(self, objective: str, trace: TurnTrace | None = None):
         route = self.router.route(objective)
 
         if route.route_type is RouteType.CHAT:
             from core.config import settings
 
-            if settings.agent.intent_llm and len(objective) <= 400:
+            if (
+                settings.agent.intent_llm
+                and len(objective) <= 400
+                and (trace is None or trace.can_call_model())
+            ):
                 from core.agent.intent_llm import classify
+
+                if trace is not None:
+                    trace.model_calls += 1
 
                 return classify(objective) or route
 
@@ -88,36 +121,168 @@ class Coordinator:
         *,
         context: dict | None = None,
         history: list[dict[str, str]] | None = None,
+        cancel: Event | None = None,
     ) -> AgentResult:
-        route = self._route(objective)
+        """One full turn, returned at once (drains the same loop as stream)."""
+        final: AgentResult | None = None
 
+        for event in self._turn(
+            objective,
+            context=context,
+            history=history,
+            cancel=cancel,
+            streaming=False,
+        ):
+            if event["type"] == "final":
+                final = event["result"]
+
+        assert final is not None  # _turn always ends with a final event
+        return final
+
+    def stream(
+        self,
+        objective: str,
+        *,
+        context: dict | None = None,
+        history: list[dict[str, str]] | None = None,
+        cancel: Event | None = None,
+    ) -> Iterator[dict]:
+        """
+        The same turn, with {"type": "token", "text": ...} events as words
+        are generated, then one {"type": "final", "result": AgentResult}.
+
+        Instant answers (small talk, tools without narration) yield only the
+        final event.
+        """
+        yield from self._turn(
+            objective,
+            context=context,
+            history=history,
+            cancel=cancel,
+            streaming=True,
+        )
+
+    # ------------------------------------------------------------------
+    # The turn loop:  route -> execute -> (narrate | converse) -> finish
+    # ------------------------------------------------------------------
+
+    def _turn(
+        self,
+        objective: str,
+        *,
+        context: dict | None,
+        history: list[dict[str, str]] | None,
+        cancel: Event | None,
+        streaming: bool,
+    ) -> Iterator[dict]:
+        from core.config import settings
+
+        trace = TurnTrace(TurnBudget.from_settings(settings))
+
+        with trace.phase("route"):
+            route = self._route(objective, trace)
+
+        trace.route = {
+            "type": route.route_type.value,
+            "target": route.target,
+            "reason": route.reason,
+        }
+
+        persona, agent_name = self._persona(route)
+        conversational = route.route_type is RouteType.CHAT or persona is not None
+
+        if not conversational:
+            with trace.phase("execute"):
+                outcome = self._execute(route, objective, context, history, trace)
+
+            if outcome is not None:
+                trace.event = outcome.event
+
+                if (
+                    outcome.event is not None
+                    and outcome.narrate
+                    and settings.agent.narrate_tools
+                    and trace.can_call_model()
+                ):
+                    yield from self._narrate(
+                        objective, outcome, trace, cancel, streaming
+                    )
+                else:
+                    yield {"type": "final", "result": self._finish(outcome.result, trace)}
+
+                return
+
+            # An LLM-chosen tool could not run: fall back to plain chat.
+            trace.notes.append("tool unavailable, answered as conversation")
+
+        yield from self._converse(
+            objective, history, persona, agent_name, trace, cancel, streaming
+        )
+
+    @staticmethod
+    def _finish(result: AgentResult, trace: TurnTrace) -> AgentResult:
+        return replace(result, trace=trace.to_dict())
+
+    def _recent(self, trace: TurnTrace | None = None) -> list:
+        if trace is not None:
+            return trace.recent_memories(self.memory)
+
+        return self.memory.recent(limit=50)
+
+    def _execute(
+        self,
+        route,
+        objective: str,
+        context: dict | None,
+        history: list[dict[str, str]] | None,
+        trace: TurnTrace,
+    ) -> Outcome | None:
+        """Run the exact part of a turn. None means: treat it as chat."""
         if route.route_type is RouteType.MEMORY:
-            return self._memory_route(route.target, objective)
+            return self._memory_outcome(route.target, objective, trace)
 
         if route.route_type is RouteType.SELF:
-            return self._self_route(route.target, objective, history)
+            return Outcome(self._self_route(route.target, objective, history, trace))
 
         if route.route_type is RouteType.TOOL:
-            result = self.runtime.tools.execute(
-                ToolRequest(
-                    name=route.target,
-                    arguments=self._tool_arguments(
-                        route.target,
-                        objective,
-                        context,
-                    ),
-                )
-            )
+            return self._tool_outcome(route, objective, context, trace)
 
-            if not result.success and route.reason.startswith("LLM"):
-                return self._chat(
-                    objective,
-                    history=history,
-                    memories=self._chat_memories(objective),
-                )
+        spec = self.registry.get(route.target)
+        combined_context = dict(context or {})
+        memory_context = self._memory_context(objective)
 
-            if not result.success:
-                return AgentResult(
+        if memory_context:
+            combined_context.update(memory_context)
+
+        return Outcome(self.runtime.run(spec, objective, context=combined_context))
+
+    def _tool_outcome(
+        self,
+        route,
+        objective: str,
+        context: dict | None,
+        trace: TurnTrace,
+    ) -> Outcome | None:
+        arguments = self._tool_arguments(route.target, objective, context)
+        request = ToolRequest(name=route.target, arguments=arguments)
+
+        started = time.perf_counter()
+        result = self.runtime.tools.execute(request)
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+
+        trace.tool = {
+            "name": route.target,
+            "arguments": arguments,
+            "ok": result.success,
+            "ms": elapsed_ms,
+        }
+
+        if not result.success:
+            if route.reason.startswith("LLM"):
+                return None
+
+            return Outcome(
+                AgentResult(
                     task_id="tool-" + route.target,
                     agent_name=route.target,
                     status=AgentStatus.FAILED,
@@ -125,135 +290,226 @@ class Coordinator:
                     steps=1,
                     history=[],
                     error=result.error,
-                )
-
-            tool_step = AgentStep(
-                number=1,
-                step_type=StepType.TOOL,
-                tool_request=ToolRequest(
-                    name=route.target,
-                    arguments=self._tool_arguments(
-                        route.target,
-                        objective,
-                        context,
-                    ),
                 ),
+                event={
+                    "source": "tool",
+                    "tool": route.target,
+                    "arguments": arguments,
+                    "ok": False,
+                    "error": str(result.error)[:300],
+                },
+                narrate=True,
+                recovers_failure=True,
             )
 
-            observation = AgentStep(
-                number=1,
-                step_type=StepType.OBSERVE,
-                tool_result=result,
-                output=str(result.output),
-            )
+        tool_step = AgentStep(
+            number=1,
+            step_type=StepType.TOOL,
+            tool_request=request,
+        )
+        observation = AgentStep(
+            number=1,
+            step_type=StepType.OBSERVE,
+            tool_result=result,
+            output=str(result.output),
+        )
 
-            phrased = phrase_tool_answer(
-                route.target,
-                objective,
-                self._tool_arguments(route.target, objective, context),
-                result.output,
-            )
+        phrased = phrase_tool_answer(route.target, objective, arguments, result.output)
 
-            if phrased is not None:
-                return AgentResult(
+        if phrased is not None:
+            return Outcome(
+                AgentResult(
                     task_id="tool-" + route.target,
                     agent_name=route.target,
                     status=AgentStatus.COMPLETE,
                     output=phrased,
                     steps=1,
                     history=[tool_step, observation],
+                ),
+                event={
+                    "source": "tool",
+                    "tool": route.target,
+                    "arguments": arguments,
+                    "ok": True,
+                    "summary": phrased,
+                    "result": json_safe(result.output),
+                    "elapsed_ms": elapsed_ms,
+                },
+                verify=numbers_to_keep(phrased),
+                narrate=len(phrased) <= MAX_EXACT_CHARS,
+            )
+
+        if self.runtime.tools.requires_inference(route.target):
+            combined_context = dict(context or {})
+            memory_context = self._memory_context(objective)
+
+            if memory_context:
+                combined_context.update(memory_context)
+
+            try:
+                answer = self.inference.compose(
+                    objective,
+                    tool_name=route.target,
+                    evidence=result.output,
+                    context=combined_context,
                 )
-
-            if self.runtime.tools.requires_inference(route.target):
-                combined_context = dict(context or {})
-                memory_context = self._memory_context(objective)
-
-                if memory_context:
-                    combined_context.update(memory_context)
-
-                try:
-                    answer = self.inference.compose(
-                        objective,
-                        tool_name=route.target,
-                        evidence=result.output,
-                        context=combined_context,
-                    )
-
-                    final_step = AgentStep(
-                        number=2,
-                        step_type=StepType.FINAL,
-                        output=answer,
-                    )
-
-                    return AgentResult(
-                        task_id="inference-" + route.target,
-                        agent_name="inference",
-                        status=AgentStatus.COMPLETE,
-                        output=answer,
-                        steps=2,
-                        history=[
-                            tool_step,
-                            observation,
-                            final_step,
-                        ],
-                    )
-                except Exception as exc:
-                    return AgentResult(
+            except Exception as exc:
+                return Outcome(
+                    AgentResult(
                         task_id="tool-" + route.target,
                         agent_name=route.target,
                         status=AgentStatus.FAILED,
                         output="",
                         steps=1,
-                        history=[
-                            tool_step,
-                            observation,
-                        ],
+                        history=[tool_step, observation],
                         error=f"Inference failed: {exc}",
                     )
+                )
 
-            return AgentResult(
+            return Outcome(
+                AgentResult(
+                    task_id="inference-" + route.target,
+                    agent_name="inference",
+                    status=AgentStatus.COMPLETE,
+                    output=answer,
+                    steps=2,
+                    history=[
+                        tool_step,
+                        observation,
+                        AgentStep(number=2, step_type=StepType.FINAL, output=answer),
+                    ],
+                )
+            )
+
+        return Outcome(
+            AgentResult(
                 task_id="tool-" + route.target,
                 agent_name=route.target,
                 status=AgentStatus.COMPLETE,
                 output=self._format_tool_output(route.target, result.output),
                 steps=1,
-                history=[
-                    tool_step,
-                    observation,
-                ],
+                history=[tool_step, observation],
             )
-
-        if route.route_type is RouteType.CHAT:
-            return self._chat(
-                objective,
-                history=history,
-                memories=self._chat_memories(objective),
-            )
-
-        spec = self.registry.get(route.target)
-
-        if not spec.allowed_tools:
-            # A text-only specialist: answer in one natural pass with its
-            # persona. (Forcing a small model through JSON mangles code.)
-            return self._chat(
-                objective,
-                history=history,
-                memories=self._chat_memories(objective),
-                persona=spec.system_prompt,
-                agent_name=spec.name,
-            )
-
-        combined_context = dict(context or {})
-        memory_context = self._memory_context(objective)
-
-        if memory_context:
-            combined_context.update(memory_context)
-
-        return self.runtime.run(
-            spec,
-            objective,
-            context=combined_context,
         )
+
+    # ---------------- the model puts what happened into words -------------
+
+    def _narrate(
+        self,
+        objective: str,
+        outcome: Outcome,
+        trace: TurnTrace,
+        cancel: Event | None,
+        streaming: bool,
+    ) -> Iterator[dict]:
+        from core import llm as llm_module
+
+        messages = narration_messages(objective, outcome.event, self._known_name(trace))
+        options = {
+            "max_tokens": 120,
+            "temperature": 0.3,
+            "timeout_s": min(25.0, trace.remaining()),
+        }
+
+        trace.model_calls += 1
+        parts: list[str] = []
+
+        try:
+            with trace.phase("narrate"):
+                if streaming:
+                    for delta in llm_module.stream_chat(messages, cancel=cancel, **options):
+                        parts.append(delta)
+                        yield {"type": "token", "text": delta}
+                else:
+                    text = llm_module.chat(messages, cancel=cancel, **options)
+                    parts.append(text)
+        except Exception as exc:
+            trace.notes.append(f"narration failed: {type(exc).__name__}")
+            parts = []
+
+        reply = "".join(parts).strip()
+        result = outcome.result
+
+        if (
+            reply
+            and len(reply) <= MAX_REPLY_CHARS
+            and reply_keeps(outcome.verify, reply)
+        ):
+            trace.narrated = True
+
+            if outcome.recovers_failure:
+                result = replace(result, status=AgentStatus.COMPLETE, error=None)
+
+            result = replace(result, output=reply)
+        elif reply:
+            trace.notes.append("narration rejected: changed a fact; used exact text")
+
+        if not result.output and result.error:
+            trace.notes.append("narration unavailable")
+
+        yield {"type": "final", "result": self._finish(result, trace)}
+
+    # ---------------- plain conversation / text-only specialists ----------
+
+    def _converse(
+        self,
+        objective: str,
+        history: list[dict[str, str]] | None,
+        persona: str | None,
+        agent_name: str,
+        trace: TurnTrace,
+        cancel: Event | None,
+        streaming: bool,
+    ) -> Iterator[dict]:
+        from core import llm as llm_module
+        from core.config import settings
+
+        messages = self._chat_messages(
+            objective,
+            history=history,
+            memories=self._chat_memories(objective, trace),
+            persona=persona,
+        )
+        options = {
+            "max_tokens": settings.agent.max_tokens,
+            "temperature": settings.agent.chat_temperature,
+            "timeout_s": trace.remaining(),
+            "cancel": cancel,
+        }
+
+        trace.model_calls += 1
+        parts: list[str] = []
+
+        try:
+            with trace.phase("model"):
+                if streaming:
+                    for delta in llm_module.stream_chat(messages, **options):
+                        parts.append(delta)
+                        yield {"type": "token", "text": delta}
+                else:
+                    parts.append(llm_module.chat(messages, **options))
+        except Exception as exc:
+            yield {
+                "type": "final",
+                "result": self._finish(
+                    self._chat_result(AgentStatus.FAILED, error=str(exc), agent_name=agent_name),
+                    trace,
+                ),
+            }
+            return
+
+        answer = "".join(parts).strip()
+
+        if answer:
+            result = self._chat_result(AgentStatus.COMPLETE, answer, agent_name=agent_name)
+        else:
+            result = self._chat_result(
+                AgentStatus.FAILED,
+                error="Conversation model produced an empty response.",
+                agent_name=agent_name,
+            )
+
+        yield {"type": "final", "result": self._finish(result, trace)}
 
     @staticmethod
     def _is_personal(memory) -> bool:
@@ -270,16 +526,16 @@ class Coordinator:
             and len(memory.content) <= 200
         )
 
-    def _known_name(self) -> str | None:
-        for memory in self.memory.recent(limit=50):
+    def _known_name(self, trace: TurnTrace | None = None) -> str | None:
+        for memory in self._recent(trace):
             if memory.content.startswith("The user's name is "):
                 return memory.content.rsplit(" is ", 1)[-1].rstrip(".")
 
         return None
 
-    def _chat_memories(self, objective: str) -> str:
+    def _chat_memories(self, objective: str, trace: TurnTrace | None = None) -> str:
         """Who the user is (always) plus anything relevant to this message."""
-        recent = [m for m in self.memory.recent(limit=50) if self._is_personal(m)]
+        recent = [m for m in self._recent(trace) if self._is_personal(m)]
         profile = [m for m in recent if m.memory_type is MemoryType.PROFILE]
         relevant = [
             m for m in self.memory.search(objective, limit=5) if self._is_personal(m)
@@ -300,12 +556,13 @@ class Coordinator:
         target: str,
         objective: str,
         history: list[dict[str, str]] | None,
+        trace: TurnTrace | None = None,
     ) -> AgentResult:
         from core.agent.selfknowledge import answer_self, variant_for
 
         answer = answer_self(
             target,
-            name=self._known_name(),
+            name=self._known_name(trace),
             variant=variant_for(objective, len(history or [])),
         )
 
@@ -318,7 +575,12 @@ class Coordinator:
             history=[],
         )
 
-    def _memory_route(self, target: str, objective: str) -> AgentResult:
+    def _memory_outcome(
+        self,
+        target: str,
+        objective: str,
+        trace: TurnTrace,
+    ) -> Outcome:
         from core.agent.understanding import (
             acknowledgement,
             answer_recall,
@@ -326,23 +588,42 @@ class Coordinator:
             recall_kind,
         )
 
-        if target == "recall":
-            answer = answer_recall(
-                recall_kind(objective) or "about",
-                [m for m in self.memory.recent(limit=50) if self._is_personal(m)],
-            )
-
+        def result(text: str) -> AgentResult:
             return AgentResult(
                 task_id=f"memory-{uuid4().hex[:12]}",
                 agent_name="memory",
                 status=AgentStatus.COMPLETE,
-                output=answer,
+                output=text,
                 steps=1,
                 history=[],
             )
 
+        if target == "recall":
+            kind = recall_kind(objective) or "about"
+            personal = [m for m in self._recent(trace) if self._is_personal(m)]
+            answer = answer_recall(kind, personal)
+            outcome = Outcome(result(answer))
+
+            if kind == "name":
+                name = (
+                    answer[len("Your name is "):].rstrip(".")
+                    if answer.startswith("Your name is ")
+                    else None
+                )
+                outcome.event = {
+                    "source": "memory",
+                    "action": "recalled",
+                    "question": "the user's name",
+                    "found": name is not None,
+                    "name": name,
+                }
+                outcome.verify = [name] if name else []
+                outcome.narrate = True
+
+            return outcome
+
         notes = extract_memory_notes(objective)
-        existing = {m.content.lower(): m for m in self.memory.recent(limit=50)}
+        existing = {m.content.lower(): m for m in self._recent(trace)}
         replaced_name = False
 
         for note in notes:
@@ -363,13 +644,18 @@ class Coordinator:
                 importance=note.importance,
             )
 
-        return AgentResult(
-            task_id=f"memory-{uuid4().hex[:12]}",
-            agent_name="memory",
-            status=AgentStatus.COMPLETE,
-            output=acknowledgement(notes, replaced_name),
-            steps=1,
-            history=[],
+        trace.forget_cache()
+
+        return Outcome(
+            result(acknowledgement(notes, replaced_name)),
+            event={
+                "source": "memory",
+                "action": "saved",
+                "items": [note.content for note in notes],
+                "replaced_previous_name": replaced_name,
+            },
+            verify=[note.detail for note in notes if note.kind in {"name", "place"}],
+            narrate=True,
         )
 
     @staticmethod
@@ -477,131 +763,6 @@ class Coordinator:
                 return spec.system_prompt, spec.name
 
         return None, "conversation"
-
-    def _chat(
-        self,
-        objective: str,
-        *,
-        history: list[dict[str, str]] | None = None,
-        memories: str = "",
-        persona: str | None = None,
-        agent_name: str = "conversation",
-    ) -> AgentResult:
-        from core.config import settings
-        from core.llm import chat as llm_chat
-
-        messages = self._chat_messages(
-            objective,
-            history=history,
-            memories=memories,
-            persona=persona,
-        )
-
-        try:
-            answer = llm_chat(
-                messages,
-                max_tokens=settings.agent.max_tokens,
-                temperature=settings.agent.chat_temperature,
-                timeout_s=settings.agent.timeout,
-            ).strip()
-        except Exception as exc:
-            return self._chat_result(
-                AgentStatus.FAILED,
-                error=str(exc),
-                agent_name=agent_name,
-            )
-
-        if not answer:
-            return self._chat_result(
-                AgentStatus.FAILED,
-                error="Conversation model produced an empty response.",
-                agent_name=agent_name,
-            )
-
-        return self._chat_result(
-            AgentStatus.COMPLETE,
-            answer,
-            agent_name=agent_name,
-        )
-
-    def stream(
-        self,
-        objective: str,
-        *,
-        context: dict | None = None,
-        history: list[dict[str, str]] | None = None,
-        cancel: Event | None = None,
-    ) -> Iterator[dict]:
-        """
-        Yield {"type": "token", "text": ...} events while a conversational
-        reply is generated, then one {"type": "final", "result": AgentResult}.
-
-        Tool and agent routes are not streamed; they yield only the final
-        event.
-        """
-        route = self._route(objective)
-        persona, agent_name = self._persona(route)
-
-        if persona is None and route.route_type is not RouteType.CHAT:
-            yield {
-                "type": "final",
-                "result": self.run(
-                    objective,
-                    context=context,
-                    history=history,
-                ),
-            }
-            return
-
-        from core import llm as llm_module
-        from core.config import settings
-
-        messages = self._chat_messages(
-            objective,
-            history=history,
-            memories=self._chat_memories(objective),
-            persona=persona,
-        )
-
-        parts: list[str] = []
-
-        try:
-            for delta in llm_module.stream_chat(
-                messages,
-                max_tokens=settings.agent.max_tokens,
-                temperature=settings.agent.chat_temperature,
-                timeout_s=settings.agent.timeout,
-                cancel=cancel,
-            ):
-                parts.append(delta)
-                yield {"type": "token", "text": delta}
-        except Exception as exc:
-            yield {
-                "type": "final",
-                "result": self._chat_result(
-                    AgentStatus.FAILED,
-                    error=str(exc),
-                    agent_name=agent_name,
-                ),
-            }
-            return
-
-        answer = "".join(parts).strip()
-
-        if not answer:
-            result = self._chat_result(
-                AgentStatus.FAILED,
-                error="Conversation model produced an empty response.",
-                agent_name=agent_name,
-            )
-        else:
-            result = self._chat_result(
-                AgentStatus.COMPLETE,
-                answer,
-                agent_name=agent_name,
-            )
-
-        yield {"type": "final", "result": result}
 
     @staticmethod
     def _tool_arguments(

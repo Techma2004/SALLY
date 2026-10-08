@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/Offline--first-Local%20LLM-2ECC71?style=flat" alt="Offline-first">
-  <img src="https://img.shields.io/badge/Version-v0.2.3-blue?style=flat" alt="Version">
+  <img src="https://img.shields.io/badge/Version-v0.3.0-blue?style=flat" alt="Version">
 </p>
 
 **SALLY is an offline-first, private-by-default personal AI assistant built around a modular agent runtime.** It runs a local GGUF model through `llama-cpp-python`, uses deterministic tools where possible, stores memory locally in SQLite/FTS5, exposes a unified Gateway for its interfaces, and includes a Rust/PyO3 native system layer for efficient hardware and battery information.
@@ -32,7 +32,7 @@
 
 ## Features
 
-**v0.2.3 Current Runtime:**
+**v0.3.0 Current Runtime:**
 
 - **Offline-first Chat:** Powered by a local GGUF model through `llama-cpp-python`. The default model is `llama-3.2-1b-instruct-q4_k_m.gguf`.
 - **Deterministic Tooling:** Requests that can be handled without generation are routed directly to registered tools, including:
@@ -461,7 +461,7 @@ To create a local profile manually, add a gitignored `memory/core/human.json` wi
 | v0.41 | 2025-08-18 | Multi-user onboarding and cross-platform documentation | ✅ Historical |
 | v0.2.0 | 2026-09 | Modular agent runtime, Gateway architecture, deterministic tools, SQLite memory manager, React web workspace, unified interface configuration, `uv` environment | ✅ Current |
 
-**Current runtime line:** The active package version is `0.2.3`. Historical versions above describe earlier development stages and are retained for project history.
+**Current runtime line:** The active package version is `0.3.0`. Historical versions above describe earlier development stages and are retained for project history.
 
 ## Roadmap
 

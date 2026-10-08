@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 
@@ -14,3 +16,24 @@ def _no_real_llm(monkeypatch):
         raise RuntimeError("Real LLM load blocked in tests; patch core.llm.get_llm")
 
     monkeypatch.setattr("core.llm.get_llm", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _exact_answers_by_default(monkeypatch):
+    """Tool results are returned exactly unless a test turns narration on."""
+    from core.config import settings
+
+    monkeypatch.setattr(
+        "core.config.settings",
+        replace(settings, agent=replace(settings.agent, narrate_tools=False)),
+    )
+
+
+@pytest.fixture
+def narration_on(monkeypatch):
+    from core import config
+
+    monkeypatch.setattr(
+        "core.config.settings",
+        replace(config.settings, agent=replace(config.settings.agent, narrate_tools=True)),
+    )

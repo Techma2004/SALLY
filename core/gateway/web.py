@@ -87,6 +87,20 @@ class ChatResponse(BaseModel):
     elapsed_ms: float
     route: str
     error: str | None = None
+    trace: dict | None = None
+
+
+class SettingsUpdate(BaseModel):
+    values: dict[str, object]
+
+
+def _route_label(trace: dict | None, fallback: str) -> str:
+    """The route that actually ran (the rules may have been overridden)."""
+    if trace and trace.get("route"):
+        route = trace["route"]
+        return f"{route['type']} \u2192 {route['target']}: {route['reason']}"
+
+    return fallback
 
 
 def _user_id(value: str) -> str:
@@ -197,8 +211,9 @@ def chat(request: ChatRequest) -> ChatResponse:
         source=result.source,
         conversation_id=conversation.id,
         elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
-        route=route,
+        route=_route_label(result.trace, route),
         error=result.error,
+        trace=result.trace,
     )
 
 
@@ -278,8 +293,9 @@ async def chat_stream(
                             (time.perf_counter() - started) * 1000,
                             2,
                         ),
-                        "route": route,
+                        "route": _route_label(response.trace, route),
                         "error": response.error,
+                        "trace": response.trace,
                     }
                 )
         except Exception as exc:
@@ -357,6 +373,40 @@ def help_page() -> dict[str, object]:
     from core.help import help_topics
 
     return help_topics(gateway.coordinator.runtime.tools)
+
+
+@app.get("/settings", dependencies=_PROTECTED)
+def get_settings() -> dict[str, object]:
+    from core import settings_schema
+    from core.config import settings
+
+    return settings_schema.describe(settings)
+
+
+@app.put("/settings", dependencies=_PROTECTED)
+def update_settings(payload: SettingsUpdate) -> dict[str, object]:
+    from core import settings_schema
+    from core.config import settings
+
+    try:
+        clean = settings_schema.validate(payload.values)
+        settings_schema.write_env(clean)
+    except settings_schema.SettingsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Some settings were not saved.", "errors": exc.errors},
+        ) from exc
+
+    return {"saved": sorted(clean), **settings_schema.describe(settings)}
+
+
+@app.post("/settings/restart", dependencies=_PROTECTED)
+def restart_sally() -> dict[str, str]:
+    from core import settings_schema
+
+    settings_schema.restart_process()
+
+    return {"status": "restarting"}
 
 
 @app.delete("/conversations/{conversation_id}", dependencies=_PROTECTED)

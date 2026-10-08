@@ -89,6 +89,10 @@ TIPS: tuple[str, ...] = (
     "Press Enter to send and Shift + Enter for a new line. The stop button "
     "ends a reply early.",
     "Type / in the message box for quick commands.",
+    "Tap Details under an answer to see what actually happened: which route "
+    "ran, how long each step took, and what the model was given.",
+    "The Settings tab changes your model, speed and limits. It saves to your "
+    ".env file and applies after a restart.",
     "Your conversations and memories are stored on this machine only. "
     "Delete any of them from the History drawer or the Memory page.",
     "SALLY runs a small local model. It can make mistakes in free "
