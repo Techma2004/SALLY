@@ -1,0 +1,19 @@
+[package]
+name = "sally-inference"
+version = "0.1.0"
+edition = "2021"
+description = "SALLY local inference engine"
+
+[lib]
+name = "sally_inference"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sally-inference"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[workspace]
