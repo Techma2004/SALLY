@@ -135,4 +135,45 @@ mod tests {
         let err = Config::load(None, &[("nope".into(), "1".into())]).unwrap_err();
         assert_eq!(err.code(), "internal");
     }
+
+    fn temp_file(tag: &str, contents: Option<&str>) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sally-inference-cfg-{}-{tag}.json",
+            std::process::id()
+        ));
+        match contents {
+            Some(c) => std::fs::write(&path, c).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        path
+    }
+
+    #[test]
+    fn load_reads_partial_json_file() {
+        let path = temp_file("partial", Some(r#"{"context_len": 256}"#));
+        let c = Config::load(Some(&path), &[]).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(c.context_len, 256);
+        let d = Config::default();
+        assert_eq!(c.max_output_tokens, d.max_output_tokens);
+        assert_eq!(c.bind, d.bind);
+        assert_eq!(c.queue_len, d.queue_len);
+    }
+
+    #[test]
+    fn load_rejects_unknown_json_field() {
+        let path = temp_file("unknown", Some(r#"{"nope": 1}"#));
+        let err = Config::load(Some(&path), &[]).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(err.code(), "internal");
+    }
+
+    #[test]
+    fn load_missing_file_errors() {
+        let path = temp_file("missing", None);
+        let err = Config::load(Some(&path), &[]).unwrap_err();
+        assert_eq!(err.code(), "internal");
+    }
 }
