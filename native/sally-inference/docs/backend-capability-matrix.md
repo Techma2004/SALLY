@@ -41,3 +41,23 @@ Q4_1, Q5_0, Q5_1, Q8_1, Q2_K, Q3_K, Q5_K, Q8_K, IQ* quants, BF16, I8/I16/I32,
 TQ*, MXFP4 and others. Also not supported: mixture-of-experts routing, MLA
 (multi-head latent attention), sparse attention, GPU backends, SIMD kernels,
 fused quantized dot products (activations stay f32).
+
+## Backend decision
+
+Decided in Task 4 (M2). Three options were considered for running the model graph.
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Own Rust CPU kernels (chosen) | Self-contained core; no native build dependency; every unsafe/untrusted-input boundary is ours and testable; small, auditable, works on Linux and Termux with plain `cargo` | We write and verify every kernel; slower than tuned SIMD/GPU backends until optimised |
+| Link llama.cpp via FFI | Mature, fast, broad model and quant coverage | Spec section 2 says a native dependency needs its own documented license, build and compatibility boundary; adds a C++ toolchain and ABI surface to Termux/Android builds; moves loading, memory policy and cancellation out of Rust control |
+| candle / burn crates | Rust-native, existing tensor ops | Large dependency trees, fast-moving APIs, would conflict with the small-dependency constraint; their GGUF and quantised support would still need validation against our limits |
+
+Chosen: own Rust CPU kernels, Llama-family dense models first (RMSNorm, RoPE,
+grouped-query attention, SwiGLU). Reasons: it keeps the core self-contained,
+satisfies the spec section 2 rule that any native dependency needs its own
+documented license/build/compatibility boundary (we avoid needing one), and it
+matches SALLY's default model, Llama 3.2 1B.
+
+Explicitly not supported by this decision: MLA (multi-head latent attention),
+sparse attention, and mixture-of-experts routing. These belong to Task 11 and
+no document or test may claim support for them before then.

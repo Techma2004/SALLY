@@ -84,6 +84,24 @@ impl GgufBuilder {
         self.kv_raw(key, T_U32, value.to_le_bytes().to_vec())
     }
 
+    pub fn kv_str_array(self, key: &str, items: &[String]) -> Self {
+        let mut v = T_STRING.to_le_bytes().to_vec();
+        v.extend_from_slice(&(items.len() as u64).to_le_bytes());
+        for s in items {
+            v.extend_from_slice(&gguf_string(s));
+        }
+        self.kv_raw(key, T_ARRAY, v)
+    }
+
+    pub fn kv_i32_array(self, key: &str, items: &[i32]) -> Self {
+        let mut v = 5u32.to_le_bytes().to_vec();
+        v.extend_from_slice(&(items.len() as u64).to_le_bytes());
+        for x in items {
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        self.kv_raw(key, T_ARRAY, v)
+    }
+
     pub fn tensor(mut self, name: &str, dims: &[u64], ty: GgmlType, bytes: Vec<u8>) -> Self {
         self.tensors.push(TensorEntry {
             name: name.to_string(),

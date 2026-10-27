@@ -20,7 +20,7 @@
 - Unsupported architecture or tensor type is an error, never a fallback (spec 6).
 - A model is "supported" only after its integration test passes; no test or doc may claim the 27B target is supported until M8 passes (spec 12).
 - Structured logs must not dump full prompts by default (spec 10).
-- Error codes: `unsupported_architecture`, `invalid_model`, `resource_exhausted`, `cancelled`, `internal` (spec 10).
+- Error codes: `unsupported_architecture`, `invalid_model`, `resource_exhausted`, `cancelled`, `internal` (spec 10) and `invalid_request` (added in Task 4 for bad client input).
 - Model soup is excluded (spec 13). Backend is Rust-native: custom CPU kernels, no linked C library (spec 2 note; recorded in Task 4's decision doc).
 - Repo is private; keep SALLY's private license untouched. If any third-party code is copied, record it in `THIRD_PARTY_NOTICES.md`.
 

@@ -85,6 +85,27 @@ impl Metadata {
         }
     }
 
+    /// Array whose elements are all integers (any width, signed or unsigned).
+    pub fn get_int_array(&self, key: &str) -> Option<Vec<i64>> {
+        match self.get(key)? {
+            Value::Array(items) => items
+                .iter()
+                .map(|v| match v {
+                    Value::U8(x) => Some(i64::from(*x)),
+                    Value::I8(x) => Some(i64::from(*x)),
+                    Value::U16(x) => Some(i64::from(*x)),
+                    Value::I16(x) => Some(i64::from(*x)),
+                    Value::U32(x) => Some(i64::from(*x)),
+                    Value::I32(x) => Some(i64::from(*x)),
+                    Value::I64(x) => Some(*x),
+                    Value::U64(x) => i64::try_from(*x).ok(),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        }
+    }
+
     /// Array whose elements are all strings.
     pub fn get_str_array(&self, key: &str) -> Option<Vec<&str>> {
         match self.get(key)? {
