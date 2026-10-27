@@ -1,7 +1,9 @@
+pub mod architecture;
 pub mod backend;
 pub mod config;
 pub mod error;
 pub mod gguf;
+pub mod model_registry;
 pub mod sampling;
 pub mod tensor_store;
 pub mod tokenizer;

@@ -84,6 +84,10 @@ impl GgufBuilder {
         self.kv_raw(key, T_U32, value.to_le_bytes().to_vec())
     }
 
+    pub fn kv_f32(self, key: &str, value: f32) -> Self {
+        self.kv_raw(key, 6, value.to_le_bytes().to_vec())
+    }
+
     pub fn kv_str_array(self, key: &str, items: &[String]) -> Self {
         let mut v = T_STRING.to_le_bytes().to_vec();
         v.extend_from_slice(&(items.len() as u64).to_le_bytes());

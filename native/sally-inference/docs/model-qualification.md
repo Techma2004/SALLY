@@ -47,3 +47,38 @@ Caveats:
   GGUF (it asserts `encode("Hello world") == [9906, 1917]` and round-trips
   several strings). It has not been run; it must be run on the target machine
   before the tokenizer is considered qualified.
+
+## Llama architecture adapter
+
+Status: **implemented, verified only against a synthetic reference; NOT yet run on a real model.**
+
+### Supported
+- `general.architecture == "llama"`, dense only.
+- RMSNorm, grouped-query attention (any `head_count` that is a multiple of `head_count_kv`), SwiGLU MLP.
+- RoPE as ggml's `GGML_ROPE_TYPE_NORMAL` (adjacent pairs), with the optional `rope_freqs.weight` factors that Llama 3.x GGUFs carry.
+- Tied embeddings (no `output.weight`: `token_embd.weight` is reused for the output projection).
+- Weight types F32, F16, Q4_0, Q8_0, Q4_K, Q6_K (norm vectors must be F32 or F16).
+
+### Refused at load time (typed error, never ignored)
+- Any other `general.architecture` (`unsupported_architecture`, names the value), including `glm_moe_dsa`.
+- Mixture-of-experts: tensors containing `_exps` or `ffn_gate_inp`, or `llama.expert_count > 0`.
+- Weight biases (any tensor ending `.bias`).
+- `llama.rope.scaling.type` other than `none` (yarn, linear, longrope...). Llama 3.x GGUFs normally express their scaling only through `rope_freqs.weight`, which is supported. If a real Llama 3.x file is refused for this reason, `inspect` will show the key; it means the scaling is not implemented, and ignoring it would change the model.
+- Per-layer head counts (array metadata), differing key/value head sizes.
+- Missing required tensors or metadata, shapes that disagree with the metadata (`invalid_model`, names the tensor).
+- Unsupported tensor types (`unsupported_architecture`, names the tensor), checked at load so generation never fails halfway.
+- Context beyond the model's trained `context_length` (`resource_exhausted`).
+
+### How correctness was established
+- `tests/generation.rs` compares the engine's logits with an independent naive f64 forward pass written in the test file (no shared code) over a 6-token sequence, for: GQA, plain multi-head attention, `rope_freqs.weight`, tied embeddings and Q8_0 weights. Tolerance 1e-4 absolute plus 1e-4 relative.
+- The comparison was mutation-checked: flipping the RoPE sign, dropping the freq-factor division, breaking the GQA head mapping and changing the attention scale each make the reference tests fail.
+- RoPE semantics were read from ggml source (master on 2026-10-27): `LLM_ARCH_LLAMA` maps to `LLAMA_ROPE_TYPE_NORM` in `src/llama-model.cpp`; `ggml/src/ggml-cpu/ops.cpp` `ggml_rope_cache_init` divides `theta` by `freq_factors[i0/2]` and multiplies by `theta_scale = freq_base^(-2/n_dims)` per pair; `rotate_pairs` with offset 1 rotates `(x[i], x[i+1])`.
+- **Not verified:** agreement with llama.cpp logits on a real checkpoint. `real_model_smoke` (set `SALLY_TEST_MODEL=/path/to/llama-3.2-1b-instruct-q4_k_m.gguf`) must be run on the target machine; it asserts that greedy generation for "The capital of France is" repeats exactly and contains "Paris".
+
+### Speed on the target machine
+
+| Model | Quant | Threads | Prefill tok/s | Decode tok/s | Peak RSS |
+|---|---|---|---|---|---|
+| llama-3.2-1b-instruct | Q4_K_M | - | NOT MEASURED YET | NOT MEASURED YET | NOT MEASURED YET |
+
+Known performance limits of this first version (correctness first): scalar kernels, rows dequantized into scratch before each dot product, threads spawned per matrix-vector product, and prefill processes one token at a time.

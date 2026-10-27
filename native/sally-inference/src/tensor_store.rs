@@ -65,6 +65,11 @@ impl TensorStore {
         })
     }
 
+    /// Names of all tensors in the file (unordered).
+    pub fn tensor_names(&self) -> impl Iterator<Item = &str> {
+        self.tensors.keys().map(String::as_str)
+    }
+
     pub fn view(&self, name: &str) -> Result<TensorView<'_>, EngineError> {
         let t = self
             .tensors
