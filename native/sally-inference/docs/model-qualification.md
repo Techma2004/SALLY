@@ -16,8 +16,12 @@ Supported:
 - Merge ranks from `tokenizer.ggml.merges`; pre-tokens that are whole vocabulary
   entries are emitted directly (llama.cpp's `ignore_merges` for llama-bpe).
 - Control tokens (`token_type == 3`) are matched literally in input text and
-  decode to empty bytes unless explicitly requested. Text typed by a user that
-  contains e.g. `<|eot_id|>` therefore becomes the control token, as in llama.cpp.
+  decode to empty bytes unless explicitly requested. `encode` (raw text) parses
+  them, as llama.cpp does with parse_special. Chat prompts must be built with
+  `encode_chat`, which inserts structural tokens as ids and encodes role names
+  and message content with `encode_plain` (no special-token parsing), so user text
+  such as `<|eot_id|>` stays literal text. `apply_chat` (string output) is for
+  display/debugging only.
 - Vocabularies lacking any of the 256 byte-level tokens are rejected as
   `invalid_model`.
 - Streaming output goes through `Utf8Stream`, which holds incomplete trailing

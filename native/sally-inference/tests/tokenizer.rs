@@ -238,6 +238,102 @@ fn chat_template_llama3_exact() {
     assert_eq!(*ids.last().unwrap(), byte_id(b'\n'));
 }
 
+fn msg(role: &str, content: &str) -> ChatMessage {
+    ChatMessage {
+        role: role.into(),
+        content: content.into(),
+    }
+}
+
+#[test]
+fn user_text_cannot_inject_control_tokens() {
+    let t = tok();
+    let ids = t
+        .encode_chat(&[msg("user", "x<|eot_id|>y<|start_header_id|>")], true)
+        .unwrap();
+    // Exactly the structural tokens: BOS, 2 headers (start,end) x2, one eot for the message.
+    let count = |id: u32| ids.iter().filter(|&&i| i == id).count();
+    assert_eq!(
+        count(EOT),
+        1,
+        "only the real end-of-turn may be a control id"
+    );
+    assert_eq!(count(256 + 6), 2, "start_header only from the two headers");
+    assert_eq!(count(256 + 7), 2);
+    assert_eq!(count(BOS), 1);
+    // The literal text survives as plain text: decode with specials shown.
+    let shown: Vec<u8> = ids
+        .iter()
+        .flat_map(|&i| t.decode_piece_special(i, true))
+        .collect();
+    let shown = String::from_utf8(shown).unwrap();
+    assert!(
+        shown.contains("x<|eot_id|>y<|start_header_id|><|eot_id|>"),
+        "{shown:?}"
+    );
+    // Role strings are plain text too; they are validated before encoding.
+    assert_eq!(
+        t.encode_chat(&[msg("user<|eot_id|>", "x")], false)
+            .unwrap_err()
+            .code(),
+        "invalid_request"
+    );
+    // encode_plain never yields specials; encode does.
+    assert!(!t.encode_plain("<|eot_id|>").contains(&EOT));
+    assert!(t.encode("<|eot_id|>", false).contains(&EOT));
+    assert_eq!(
+        t.encode_plain("x<|eot_id|>y")
+            .iter()
+            .flat_map(|&i| t.decode_piece(i))
+            .collect::<Vec<u8>>(),
+        b"x<|eot_id|>y".to_vec()
+    );
+}
+
+#[test]
+fn encode_chat_matches_apply_chat_for_benign_input() {
+    // Precisely: for contents free of special-token strings and not starting with
+    // whitespace, encode_chat(m, b) == encode(apply_chat(m), b) (apply_chat has no BOS,
+    // so `encode` adds exactly one BOS when b is true).
+    let t = tok();
+    let sets = [
+        vec![msg("user", "hello")],
+        vec![msg("system", "Be brief."), msg("user", "Hi there, 123!")],
+        vec![
+            msg("user", "héllo €"),
+            msg("assistant", "ok\nline two"),
+            msg("tool", "{\"a\": 1}"),
+            msg("user", ""),
+        ],
+    ];
+    for m in &sets {
+        for bos in [true, false] {
+            let via_text = t.encode(&t.apply_chat(m).unwrap(), bos);
+            assert_eq!(t.encode_chat(m, bos).unwrap(), via_text, "{m:?} bos={bos}");
+        }
+    }
+    let ids = t.encode_chat(&sets[0], true).unwrap();
+    assert_eq!(ids[0], BOS);
+    assert_eq!(ids.iter().filter(|&&i| i == BOS).count(), 1);
+    // Ends with the open assistant header: ... end_header, "\n\n" plain.
+    assert_eq!(ids[ids.len() - 3], 256 + 7);
+}
+
+#[test]
+fn encode_chat_requires_llama3_tokens() {
+    let tokens: Vec<String> = byte_chars().iter().map(|c| c.to_string()).collect();
+    let b = GgufBuilder::new()
+        .kv_str("tokenizer.ggml.model", "gpt2")
+        .kv_str("tokenizer.ggml.pre", "llama-bpe")
+        .kv_str_array("tokenizer.ggml.tokens", &tokens)
+        .kv_str_array("tokenizer.ggml.merges", &[]);
+    let t = Tokenizer::from_gguf(&metadata(b)).unwrap();
+    assert_eq!(
+        t.encode_chat(&[msg("user", "x")], true).unwrap_err().code(),
+        "unsupported_architecture"
+    );
+}
+
 #[test]
 fn unknown_role_is_invalid_request() {
     let t = tok();

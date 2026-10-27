@@ -38,6 +38,8 @@ pub struct ChatMessage {
 
 #[derive(Debug, Clone, Copy)]
 struct ChatIds {
+    start_header: u32,
+    end_header: u32,
     eot: u32,
 }
 
@@ -235,7 +237,11 @@ impl Tokenizer {
             lookup("<|end_header_id|>"),
             lookup("<|eot_id|>"),
         ) {
-            (Some(_), Some(_), Some(eot)) => Some(ChatIds { eot }),
+            (Some(start_header), Some(end_header), Some(eot)) => Some(ChatIds {
+                start_header,
+                end_header,
+                eot,
+            }),
             _ => None,
         };
 
@@ -304,7 +310,7 @@ impl Tokenizer {
                     .iter()
                     .find(|(s, _)| bytes[i..].starts_with(s))
                 {
-                    self.encode_plain(&text[seg_start..i], &mut out);
+                    self.encode_plain_into(&text[seg_start..i], &mut out);
                     out.push(*id);
                     i += s.len();
                     seg_start = i;
@@ -313,11 +319,20 @@ impl Tokenizer {
             }
             i += 1;
         }
-        self.encode_plain(&text[seg_start..], &mut out);
+        self.encode_plain_into(&text[seg_start..], &mut out);
         out
     }
 
-    fn encode_plain(&self, text: &str, out: &mut Vec<u32>) {
+    /// Encodes `text` as ordinary text only: special-token strings such as
+    /// `<|eot_id|>` are NOT recognised and are tokenized like any other characters.
+    /// Use this for untrusted text (chat roles and message content).
+    pub fn encode_plain(&self, text: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        self.encode_plain_into(text, &mut out);
+        out
+    }
+
+    fn encode_plain_into(&self, text: &str, out: &mut Vec<u32>) {
         if text.is_empty() {
             return;
         }
@@ -411,9 +426,14 @@ impl Tokenizer {
         }
     }
 
-    /// Renders messages in the Llama 3 instruct format, ending with an open assistant
-    /// header. `<|begin_of_text|>` is not included; use `encode(.., true)`.
+    /// Renders messages in the Llama 3 instruct format as text, ending with an open
+    /// assistant header. `<|begin_of_text|>` is not included.
     /// Roles are limited to system, user, assistant, tool.
+    ///
+    /// FOR DISPLAY AND DEBUGGING ONLY. Tokenizing this string with [`encode`](Self::encode)
+    /// parses special tokens, so message text containing e.g. `<|eot_id|>` would become a
+    /// real control token (prompt injection). Build model input with
+    /// [`encode_chat`](Self::encode_chat) instead.
     pub fn apply_chat(&self, msgs: &[ChatMessage]) -> Result<String, EngineError> {
         let Some(ids) = self.chat else {
             return Err(EngineError::UnsupportedArchitecture(
@@ -438,6 +458,51 @@ impl Tokenizer {
         }
         s.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
         Ok(s)
+    }
+
+    /// Builds the token ids of a Llama 3 instruct prompt directly. Structural tokens (BOS if
+    /// `add_bos` and the vocabulary has one, `<|start_header_id|>`, `<|end_header_id|>`,
+    /// `<|eot_id|>`) are inserted as ids; role names, the `\n\n` after each header and all
+    /// message content are encoded as plain text with special-token parsing disabled, so
+    /// user text can never produce a control token. Ends with the open assistant header.
+    ///
+    /// For input whose content contains no special-token strings and does not begin with
+    /// whitespace, the result equals `encode(&apply_chat(msgs)?, add_bos)`.
+    /// Roles are validated as in [`apply_chat`](Self::apply_chat).
+    pub fn encode_chat(
+        &self,
+        msgs: &[ChatMessage],
+        add_bos: bool,
+    ) -> Result<Vec<u32>, EngineError> {
+        let Some(ids) = self.chat else {
+            return Err(EngineError::UnsupportedArchitecture(
+                "chat template: only the Llama 3 instruct format (<|start_header_id|>, <|end_header_id|>, <|eot_id|> tokens) is supported"
+                    .into(),
+            ));
+        };
+        let mut out = Vec::new();
+        if add_bos {
+            out.extend(self.bos);
+        }
+        let header = |out: &mut Vec<u32>, role: &str| {
+            out.push(ids.start_header);
+            self.encode_plain_into(role, out);
+            out.push(ids.end_header);
+            self.encode_plain_into("\n\n", out);
+        };
+        for m in msgs {
+            if !matches!(m.role.as_str(), "system" | "user" | "assistant" | "tool") {
+                return Err(EngineError::InvalidRequest(format!(
+                    "unknown role {:?} (expected system, user, assistant or tool)",
+                    m.role
+                )));
+            }
+            header(&mut out, &m.role);
+            self.encode_plain_into(&m.content, &mut out);
+            out.push(ids.eot);
+        }
+        header(&mut out, "assistant");
+        Ok(out)
     }
 
     #[doc(hidden)]
