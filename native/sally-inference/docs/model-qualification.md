@@ -107,3 +107,37 @@ Verified by tests: reservations are released on drop and are atomic across threa
 Measured on the synthetic tiny model with an injected 40 ms per forward step (test `disconnect_cancels_and_frees_kv_and_the_next_request_works`): the budget returned to zero 187 ms after the client closed the socket (about one to four token steps), and the next request succeeded. With a real model the latency is one token step (the loop checks cancellation between tokens), so it scales with decode time per token; prefill is also token-by-token, so a cancel during a long prompt takes effect after the current token. Not yet measured on the real 1B model.
 
 Known gap: a streamed request that times out mid-stream ends with an error event and `[DONE]`; this path is implemented but has no dedicated test (the non-streaming timeout path does).
+
+## `qualify` command
+
+```sh
+sally-inference qualify <model.gguf> [--context N] [--memory-mb N]
+```
+
+Reads only the GGUF header and tensor index (safe on files larger than RAM) and prints: architecture, whether this engine implements it, each missing capability, total weight bytes, non-expert ("dense") bytes for mixture-of-experts files, KV-cache bytes at the configured context, and whether weights + KV fit the memory budget. Exit codes: 0 qualified, 1 supported but does not fit, 2 not supported. It never proposes a substitute architecture.
+
+Detection is name-based for MoE (`*_exps.*` tensors or `<arch>.expert_count`), latent attention (`attn_kv_a_mqa`, `attn_q_a.`, `attn_kv_b.`), sparse attention (tensors containing `indexer`) and biases; the tensor names for the last group are heuristics and must be confirmed with `inspect` on the real file. "Fits" assumes no expert streaming, so it is deliberately conservative for MoE files. A pass means the adapter covers the file and it fits; the model is still unqualified until its integration test passes on the target machine.
+
+## GLM 5.2 audit
+
+Verdict: **not qualified on a 3.7 GiB machine, and not supported by this engine.**
+
+Figures below are secondhand (vendor and third-party pages, retrieved 2026-10-26) and must be re-verified by running `inspect` and `qualify` on the real file. They were not measured here.
+
+| Property | Reported value |
+|---|---|
+| Parameters | about 744B total, about 40B active per token |
+| Layers | 78 (3 dense, 75 mixture-of-experts) |
+| Experts | 256 routed, 8 routed per token |
+| Attention | multi-head latent attention with sparse attention |
+| Smallest published GGUF | about 217 GB (Unsloth quantisation of a ~1.5 TB original) |
+
+Why it does not qualify:
+
+1. **Capacity.** Even the dense part alone (attention, shared layers, embeddings) is not confirmed to fit in 4 GB, and 217 GB of weights cannot be held in RAM. Each token would need 8 routed experts per MoE layer read from disk (75 layers); a laptop disk cannot supply that at a usable rate, so tokens per second would be measured in seconds per token or worse. That is an estimate, not a benchmark.
+2. **Missing operations.** This engine has no MoE routing, no expert streaming, no latent attention and no sparse attention. `qualify` reports each of these as missing rather than approximating them.
+3. **Upstream.** The reports say mainline llama.cpp does not implement this model's sparse attention, so there is no reference implementation to verify against.
+
+What would have to exist first (none is planned in this phase): a verified MoE adapter, expert streaming with a measured cache hit rate, latent attention, and sparse attention checked against a reference. Each would need its own spec.
+
+Sources: aiweekly.co/alerts/unsloth-quantizes-glm-52s-151tb-to-217gb-for-local-inference; unsloth.ai/docs/models/glm-5.2; apidog.com/blog/glm-5-2-what-is; houdao.com/d/14441-Zhipu-GLM5-2-Deployment-Guide-Hardware-vLLM-SGLang-for-the-744B-MoE-Model; docs.api.nvidia.com/nim/reference/z-ai-glm-5.2.

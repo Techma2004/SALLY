@@ -23,6 +23,7 @@ const USAGE: &str = "usage:
   sally-inference generate --model <model.gguf> --prompt <text> [--chat]
       [--max-tokens N] [--temperature T] [--top-k K] [--top-p P] [--seed S]
       [--threads N] [--context N] [--memory-mb N] [--log-json]
+  sally-inference qualify <model.gguf> [--context N] [--memory-mb N]
   sally-inference serve --model <model.gguf> [--bind 127.0.0.1:8088] [--context N]
       [--memory-mb N] [--queue N] [--max-output-tokens N] [--timeout-secs N]
       [--threads N] [--max-body-bytes N]   (loopback addresses only)";
@@ -288,6 +289,31 @@ fn run_serve(overrides: &[(String, String)]) -> Result<(), EngineError> {
     }
 }
 
+fn run_qualify(path: &str, rest: &[String]) -> Result<u8, String> {
+    let mut overrides = Vec::new();
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        let key = match flag.as_str() {
+            "--context" => "context_len",
+            "--memory-mb" => "memory_budget_mb",
+            other => return Err(format!("unknown option {other}")),
+        };
+        let v = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        overrides.push((key.to_string(), v.clone()));
+    }
+    let cfg = Config::load(None, &overrides).map_err(|e| e.to_string())?;
+    match sally_inference::qualify::qualify(Path::new(path), &cfg) {
+        Ok(report) => {
+            print!("{}", report.render());
+            Ok(report.exit_code())
+        }
+        Err(e) => {
+            eprintln!("error [{}]: {e}", e.code());
+            Ok(exit_code(&e))
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
@@ -303,6 +329,10 @@ fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             },
+            Err(msg) => usage_error(&msg),
+        },
+        [cmd, path, rest @ ..] if cmd == "qualify" => match run_qualify(path, rest) {
+            Ok(code) => ExitCode::from(code),
             Err(msg) => usage_error(&msg),
         },
         [cmd, rest @ ..] if cmd == "serve" => match parse_serve(rest) {

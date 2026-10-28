@@ -8,6 +8,7 @@ pub mod generate;
 pub mod gguf;
 pub mod memory;
 pub mod model_registry;
+pub mod qualify;
 pub mod sampling;
 pub mod scheduler;
 pub mod telemetry;
