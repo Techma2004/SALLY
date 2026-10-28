@@ -8,6 +8,7 @@ pub mod gguf;
 pub mod memory;
 pub mod model_registry;
 pub mod sampling;
+pub mod scheduler;
 pub mod telemetry;
 pub mod tensor_store;
 pub mod tokenizer;
