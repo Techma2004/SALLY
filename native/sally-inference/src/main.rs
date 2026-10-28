@@ -5,7 +5,9 @@ use sally_inference::config::Config;
 use sally_inference::error::EngineError;
 use sally_inference::generate::{generate, GenParams};
 use sally_inference::gguf::GgufFile;
+use sally_inference::memory::{fmt_bytes, open_cache, Budget};
 use sally_inference::model_registry;
+use sally_inference::telemetry::{mem_available_bytes, peak_rss_bytes, Metrics};
 use sally_inference::tensor_store::TensorStore;
 use sally_inference::tokenizer::{ChatMessage, Tokenizer};
 use std::io::Write;
@@ -17,7 +19,7 @@ const USAGE: &str = "usage:
   sally-inference inspect <model.gguf>
   sally-inference generate --model <model.gguf> --prompt <text> [--chat]
       [--max-tokens N] [--temperature T] [--top-k K] [--top-p P] [--seed S]
-      [--threads N] [--context N]";
+      [--threads N] [--context N] [--memory-mb N] [--log-json]";
 
 /// 0 ok; 1 I/O, resource or internal error; 2 invalid/unsupported model; 64 usage.
 fn exit_code(e: &EngineError) -> u8 {
@@ -44,6 +46,8 @@ struct GenerateArgs {
     params: GenParams,
     threads: Option<usize>,
     context: Option<usize>,
+    memory_mb: Option<usize>,
+    log_json: bool,
 }
 
 fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
@@ -56,11 +60,17 @@ fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
         params: GenParams::default(),
         threads: None,
         context: None,
+        memory_mb: None,
+        log_json: false,
     };
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         if flag == "--chat" {
             out.chat = true;
+            continue;
+        }
+        if flag == "--log-json" {
+            out.log_json = true;
             continue;
         }
         let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -88,6 +98,7 @@ fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
             }
             "--threads" => out.threads = Some(int("--threads")?),
             "--context" => out.context = Some(int("--context")?),
+            "--memory-mb" => out.memory_mb = Some(int("--memory-mb")?),
             other => return Err(format!("unknown option {other}")),
         }
     }
@@ -110,8 +121,33 @@ fn run_generate(a: GenerateArgs) -> Result<(), EngineError> {
     let store = TensorStore::open(&file, &a.model)?;
     let mut model = LlamaModel::load(store, &file.metadata, threads)?;
     let ctx = context.min(model.context_len());
-    let mut cache = model.new_cache(ctx)?;
+
+    let weight_bytes: u64 = file.tensors.iter().map(|t| t.n_bytes).sum();
+    let budget_mb = a.memory_mb.unwrap_or(defaults.memory_budget_mb);
+    let budget = Budget::new(budget_mb.saturating_mul(1024 * 1024));
+    let _scratch = budget.reserve("scratch buffers", model.scratch_bytes())?;
+    let (mut cache, _kv) = open_cache(&model, ctx, &budget)?;
     let load_ms = loading.elapsed().as_secs_f64() * 1000.0;
+
+    eprintln!(
+        "[sally] memory: weights_mapped={} kv_cache={} scratch={} budget_used={} of {}",
+        fmt_bytes(weight_bytes as usize),
+        fmt_bytes(cache.bytes()),
+        fmt_bytes(model.scratch_bytes()),
+        fmt_bytes(budget.used()),
+        fmt_bytes(budget.limit()),
+    );
+    if let Some(avail) = mem_available_bytes() {
+        if weight_bytes > avail {
+            eprintln!(
+                "[sally] warning: the model's weights ({}) are larger than the memory currently \
+                 available ({}). They are memory-mapped and will be paged from disk, so expect \
+                 heavy disk reads and slow generation.",
+                fmt_bytes(weight_bytes as usize),
+                fmt_bytes(avail as usize),
+            );
+        }
+    }
 
     let prompt = if a.chat {
         let msgs = [ChatMessage {
@@ -148,6 +184,15 @@ fn run_generate(a: GenerateArgs) -> Result<(), EngineError> {
         stats.decode_tokens_per_sec(),
         stats.finish.as_str(),
     );
+    if let Some(peak) = peak_rss_bytes() {
+        eprintln!("[sally] peak_rss={}", fmt_bytes(peak as usize));
+    }
+    if a.log_json {
+        eprintln!(
+            "{}",
+            Metrics::from_stats(&stats, load_ms, cache.bytes()).log_json()
+        );
+    }
     Ok(())
 }
 

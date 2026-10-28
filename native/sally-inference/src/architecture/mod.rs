@@ -28,6 +28,12 @@ pub trait Architecture {
     fn kv_bytes(&self, ctx: usize) -> usize;
 
     fn vocab_size(&self) -> usize;
+
+    /// Allocates an empty KV cache shaped for this model with room for `ctx` positions.
+    fn new_cache(&self, ctx: usize) -> Result<KvCache, EngineError>;
+
+    /// Bytes of reusable scratch buffers the model holds besides its weights.
+    fn scratch_bytes(&self) -> usize;
 }
 
 /// Key/value cache for one sequence, f32 storage:

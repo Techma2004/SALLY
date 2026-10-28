@@ -57,6 +57,8 @@ pub struct GenStats {
     pub tokens: Vec<u32>,
     pub prefill_secs: f64,
     pub decode_secs: f64,
+    /// Seconds from the start of the request (prefill included) to the first sampled token.
+    pub first_token_secs: Option<f64>,
     pub finish: FinishReason,
 }
 
@@ -136,6 +138,7 @@ pub fn generate(
         tokens: Vec::new(),
         prefill_secs: 0.0,
         decode_secs: 0.0,
+        first_token_secs: None,
         finish: FinishReason::Length,
     };
     let mut logits: Vec<f32> = Vec::new();
@@ -168,6 +171,9 @@ pub fn generate(
         }
         stats.tokens.push(next);
         first_done.get_or_insert_with(Instant::now);
+        stats
+            .first_token_secs
+            .get_or_insert_with(|| started.elapsed().as_secs_f64());
         let text = utf8.push(&tok.decode_piece(next));
         if !text.is_empty() {
             on_text(&text);

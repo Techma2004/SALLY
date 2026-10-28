@@ -82,3 +82,20 @@ Status: **implemented, verified only against a synthetic reference; NOT yet run 
 | llama-3.2-1b-instruct | Q4_K_M | - | NOT MEASURED YET | NOT MEASURED YET | NOT MEASURED YET |
 
 Known performance limits of this first version (correctness first): scalar kernels, rows dequantized into scratch before each dot product, threads spawned per matrix-vector product, and prefill processes one token at a time.
+
+## Memory policy (spec section 7)
+
+| Resource | Policy | Enforced by |
+|---|---|---|
+| Model weights | Memory-mapped, file-backed. **Reported, not charged** to the budget: the OS pages them in and out, which costs speed, not heap. `generate` prints the mapped size and warns when it exceeds `MemAvailable`. | `tensor_store`, CLI warning |
+| KV cache | f32, `2 * layers * ctx * kv_heads * head_dim * 4` bytes. Charged to the budget before allocation; a refusal says how many tokens of context would fit. | `memory::open_cache` |
+| Scratch buffers | Allocated once at model load, reused; charged to the budget. | `Architecture::scratch_bytes` |
+| Context | A request whose cached + prompt + output tokens exceed `min(cache, model context)` is refused with `resource_exhausted`, never truncated. | `generate::generate` |
+| Concurrency | One generation at a time (scheduler arrives with the API). | Task 7 |
+| Failure | Typed `resource_exhausted` with the numbers, no repeated OOM attempts. | `memory::Budget::reserve` |
+
+The budget is `--memory-mb` (default 2048). It bounds the engine's own working memory only. Peak RSS (`VmHWM`) is printed after every run so the real figure is always visible next to the budget; if RSS is far above the budget, the difference is paged-in weights.
+
+Honest limits: the budget does not cover allocator overhead, thread stacks or the OS page cache, and a model whose weights do not fit in RAM will run, but from disk, slowly. Nothing is swapped to hide this.
+
+Verified by tests: reservations are released on drop and are atomic across threads; an oversized KV cache is refused naming the bytes needed and the context that would fit; RSS tracks a real 64 MiB allocation; 20 repeated requests grow RSS by less than 5% after warm-up (checked to fail when a 256 KiB/request leak is injected); logs carry no request text.

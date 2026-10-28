@@ -331,11 +331,6 @@ impl LlamaModel {
             s,
         })
     }
-
-    /// Allocates a KV cache shaped for this model with room for `ctx` positions.
-    pub fn new_cache(&self, ctx: usize) -> Result<KvCache, EngineError> {
-        KvCache::try_new(self.hp.n_layer, self.hp.n_kv, self.hp.head_dim, ctx)
-    }
 }
 
 fn rms_norm(x: &[f32], w: &[f32], eps: f32, out: &mut [f32]) {
@@ -524,5 +519,20 @@ impl Architecture for LlamaModel {
 
     fn vocab_size(&self) -> usize {
         self.hp.n_vocab
+    }
+
+    fn new_cache(&self, ctx: usize) -> Result<KvCache, EngineError> {
+        KvCache::try_new(self.hp.n_layer, self.hp.n_kv, self.hp.head_dim, ctx)
+    }
+
+    fn scratch_bytes(&self) -> usize {
+        let s = &self.s;
+        [
+            &s.x, &s.xb, &s.proj, &s.q, &s.k, &s.v, &s.att, &s.att_out, &s.gate, &s.up, &s.rope,
+            &s.logits,
+        ]
+        .iter()
+        .map(|v| v.capacity() * std::mem::size_of::<f32>())
+        .sum()
     }
 }
