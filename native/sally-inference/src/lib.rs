@@ -1,7 +1,9 @@
 pub mod architecture;
 pub mod backend;
+pub mod cancel;
 pub mod config;
 pub mod error;
+pub mod generate;
 pub mod gguf;
 pub mod model_registry;
 pub mod sampling;

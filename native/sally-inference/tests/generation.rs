@@ -761,3 +761,667 @@ fn real_model_smoke() {
     assert_eq!(a, b, "greedy generation must repeat exactly");
     assert!(a.contains("Paris"), "unexpected continuation: {a:?}");
 }
+
+// ---------------------------------------------------------------- generation loop + CLI
+
+use sally_inference::cancel::CancelToken;
+use sally_inference::generate::{generate, FinishReason, GenParams, GenStats};
+use sally_inference::tokenizer::Tokenizer;
+use std::process::Command;
+
+/// GPT-2 bytes_to_unicode, written independently of the crate.
+fn byte_chars() -> Vec<char> {
+    let printable: Vec<u32> = (33..=126).chain(161..=172).chain(174..=255).collect();
+    let mut table = vec!['\0'; 256];
+    for &b in &printable {
+        table[b as usize] = char::from_u32(b).unwrap();
+    }
+    let mut n = 0;
+    for b in 0..256u32 {
+        if !printable.contains(&b) {
+            table[b as usize] = char::from_u32(256 + n).unwrap();
+            n += 1;
+        }
+    }
+    table
+}
+
+// 0..=255 byte tokens, he(256) ll(257) hell(258) hello(259), then BOS(260) .. eot(264).
+const LM_VOCAB: usize = 265;
+
+fn with_tokenizer(b: GgufBuilder) -> GgufBuilder {
+    let mut tokens: Vec<String> = byte_chars().iter().map(|c| c.to_string()).collect();
+    let mut types = vec![1; 256];
+    for t in ["he", "ll", "hell", "hello"] {
+        tokens.push(t.into());
+        types.push(1);
+    }
+    for t in [
+        "<|begin_of_text|>",
+        "<|end_of_text|>",
+        "<|start_header_id|>",
+        "<|end_header_id|>",
+        "<|eot_id|>",
+    ] {
+        tokens.push(t.into());
+        types.push(3);
+    }
+    assert_eq!(tokens.len(), LM_VOCAB);
+    let merges: Vec<String> = ["h e", "l l", "he ll", "hell o"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    b.kv_str("tokenizer.ggml.model", "gpt2")
+        .kv_str_array("tokenizer.ggml.tokens", &tokens)
+        .kv_str_array("tokenizer.ggml.merges", &merges)
+        .kv_i32_array("tokenizer.ggml.token_type", &types)
+        .kv_u32("tokenizer.ggml.bos_token_id", 260)
+        .kv_u32("tokenizer.ggml.eos_token_id", 264)
+}
+
+fn lm_cfg() -> Cfg {
+    let mut c = Cfg::base();
+    c.vocab = LM_VOCAB;
+    c
+}
+
+fn lm_bytes() -> Vec<u8> {
+    let cfg = lm_cfg();
+    assemble(
+        with_tokenizer(meta_builder(&cfg, &[])),
+        &tensor_list(&cfg, &weights(&cfg, 11)),
+    )
+}
+
+fn lm() -> (LlamaModel, Tokenizer) {
+    let bytes = lm_bytes();
+    let tmp = TempFile::new(&bytes);
+    let file = GgufFile::open(&tmp.0).unwrap();
+    let store = TensorStore::open(&file, &tmp.0).unwrap();
+    let tok = Tokenizer::from_gguf(&file.metadata).unwrap();
+    (LlamaModel::load(store, &file.metadata, 2).unwrap(), tok)
+}
+
+fn gen(
+    model: &mut dyn Architecture,
+    tok: &Tokenizer,
+    cache: &mut KvCache,
+    prompt: &[u32],
+    params: &GenParams,
+    cancel: &CancelToken,
+) -> Result<(GenStats, String), EngineError> {
+    let mut text = String::new();
+    let stats = generate(model, tok, cache, prompt, params, cancel, &mut |t| {
+        assert!(!t.is_empty(), "on_text must never get an empty string");
+        text.push_str(t);
+    })?;
+    Ok((stats, text))
+}
+
+fn greedy(max_tokens: usize) -> GenParams {
+    GenParams {
+        max_tokens,
+        temperature: 0.0,
+        top_k: 0,
+        top_p: 1.0,
+        seed: 1,
+    }
+}
+
+const PROMPT: [u32; 3] = [260, 104, 105];
+
+#[test]
+fn generate_stops_at_max_tokens_or_eos() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(32).unwrap();
+    let (stats, _) = gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(6),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(stats.prompt_tokens, 3);
+    match stats.finish {
+        FinishReason::Length => assert_eq!(stats.tokens.len(), 6),
+        FinishReason::Stop => assert!(stats.tokens.len() < 6),
+        FinishReason::Cancelled => panic!("nobody cancelled"),
+    }
+    assert!(stats.tokens.iter().all(|t| !tok.is_eos(*t)));
+}
+
+#[test]
+fn generated_text_matches_decoded_tokens() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(64).unwrap();
+    let p = GenParams {
+        max_tokens: 40,
+        temperature: 1.0,
+        top_k: 0,
+        top_p: 1.0,
+        seed: 5,
+    };
+    let (stats, text) = gen(&mut m, &tok, &mut cache, &PROMPT, &p, &CancelToken::new()).unwrap();
+    let bytes: Vec<u8> = stats
+        .tokens
+        .iter()
+        .flat_map(|t| tok.decode_piece(*t))
+        .collect();
+    assert_eq!(text, String::from_utf8_lossy(&bytes));
+}
+
+#[test]
+fn same_seed_same_output_different_seed_differs() {
+    let params = |seed| GenParams {
+        max_tokens: 12,
+        temperature: 1.0,
+        top_k: 0,
+        top_p: 1.0,
+        seed,
+    };
+    let run_with = |seed| {
+        let (mut m, tok) = lm();
+        let mut cache = m.new_cache(32).unwrap();
+        gen(
+            &mut m,
+            &tok,
+            &mut cache,
+            &PROMPT,
+            &params(seed),
+            &CancelToken::new(),
+        )
+        .unwrap()
+        .0
+        .tokens
+    };
+    assert_eq!(run_with(7), run_with(7));
+    assert_ne!(run_with(7), run_with(8));
+}
+
+#[test]
+fn request_that_does_not_fit_is_refused_before_any_work() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(10).unwrap();
+    let mut seen = false;
+    let e = generate(
+        &mut m,
+        &tok,
+        &mut cache,
+        &[260, 1, 2, 3, 4, 5],
+        &greedy(8),
+        &CancelToken::new(),
+        &mut |_| seen = true,
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), "resource_exhausted");
+    assert!(e.to_string().contains("10-token context"), "{e}");
+    assert_eq!(
+        cache.len(),
+        0,
+        "nothing may be evaluated for a refused request"
+    );
+    assert!(!seen);
+
+    // Exactly fitting is accepted; one more is not.
+    let mut cache = m.new_cache(10).unwrap();
+    assert!(gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(7),
+        &CancelToken::new()
+    )
+    .is_ok());
+    let mut cache = m.new_cache(10).unwrap();
+    let e = gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(8),
+        &CancelToken::new(),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), "resource_exhausted");
+}
+
+#[test]
+fn huge_max_tokens_does_not_overflow() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(10).unwrap();
+    let e = gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(usize::MAX),
+        &CancelToken::new(),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), "resource_exhausted");
+}
+
+#[test]
+fn model_context_limit_applies_even_with_a_bigger_cache() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(500).unwrap(); // model context is 64
+    let e = gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(62),
+        &CancelToken::new(),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), "resource_exhausted");
+    assert!(e.to_string().contains("64-token context"), "{e}");
+}
+
+#[test]
+fn empty_prompt_and_zero_max_tokens_are_invalid_requests() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(16).unwrap();
+    let c = CancelToken::new();
+    let e = gen(&mut m, &tok, &mut cache, &[], &greedy(4), &c).unwrap_err();
+    assert_eq!(e.code(), "invalid_request");
+    let e = gen(&mut m, &tok, &mut cache, &PROMPT, &greedy(0), &c).unwrap_err();
+    assert_eq!(e.code(), "invalid_request");
+}
+
+#[test]
+fn cancel_before_start_does_no_work() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(16).unwrap();
+    let c = CancelToken::new();
+    c.cancel();
+    let (stats, text) = gen(&mut m, &tok, &mut cache, &PROMPT, &greedy(4), &c).unwrap();
+    assert_eq!(stats.finish, FinishReason::Cancelled);
+    assert!(stats.tokens.is_empty());
+    assert!(text.is_empty());
+    assert_eq!(cache.len(), 0);
+}
+
+/// Delegates to a real model and fires `cancel` once `after` forward steps have run.
+struct CancelAfter<'a> {
+    inner: &'a mut LlamaModel,
+    cancel: CancelToken,
+    after: usize,
+    calls: usize,
+}
+
+impl Architecture for CancelAfter<'_> {
+    fn forward(
+        &mut self,
+        token: u32,
+        pos: usize,
+        state: &mut KvCache,
+    ) -> Result<&[f32], EngineError> {
+        self.calls += 1;
+        if self.calls == self.after {
+            self.cancel.cancel();
+        }
+        self.inner.forward(token, pos, state)
+    }
+    fn context_len(&self) -> usize {
+        self.inner.context_len()
+    }
+    fn kv_bytes(&self, ctx: usize) -> usize {
+        self.inner.kv_bytes(ctx)
+    }
+    fn vocab_size(&self) -> usize {
+        self.inner.vocab_size()
+    }
+}
+
+#[test]
+fn cancel_mid_generation_stops_cleanly_and_model_stays_usable() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(32).unwrap();
+    let cancel = CancelToken::new();
+    let mut wrapped = CancelAfter {
+        inner: &mut m,
+        cancel: cancel.clone(),
+        after: 4, // 3 prompt steps + the first decode step
+        calls: 0,
+    };
+    let (stats, _) = gen(
+        &mut wrapped,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(20),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(stats.finish, FinishReason::Cancelled);
+    assert_eq!(
+        stats.tokens.len(),
+        2,
+        "stops at the next check after the fourth step"
+    );
+    assert_eq!(
+        cache.len(),
+        4,
+        "the cache keeps exactly the processed positions"
+    );
+
+    // The same model and a reset cache behave exactly like a fresh run.
+    cache.reset();
+    let (again, _) = gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(5),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    let (mut fresh_model, tok2) = lm();
+    let mut fresh_cache = fresh_model.new_cache(32).unwrap();
+    let (want, _) = gen(
+        &mut fresh_model,
+        &tok2,
+        &mut fresh_cache,
+        &PROMPT,
+        &greedy(5),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(again.tokens, want.tokens);
+}
+
+#[test]
+fn feeding_the_prompt_in_two_calls_matches_one_call() {
+    let (mut m, tok) = lm();
+    let mut whole = m.new_cache(32).unwrap();
+    let (a, _) = gen(
+        &mut m,
+        &tok,
+        &mut whole,
+        &PROMPT,
+        &greedy(6),
+        &CancelToken::new(),
+    )
+    .unwrap();
+
+    let mut split = m.new_cache(32).unwrap();
+    // First call only warms the cache with the leading prompt tokens.
+    gen(
+        &mut m,
+        &tok,
+        &mut split,
+        &PROMPT[..2],
+        &greedy(1),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    // It generated one token that was never forwarded; the cache holds only the prompt.
+    assert_eq!(split.len(), 2);
+    let (b, _) = gen(
+        &mut m,
+        &tok,
+        &mut split,
+        &PROMPT[2..],
+        &greedy(6),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(a.tokens, b.tokens);
+}
+
+#[test]
+fn stats_report_rates() {
+    let (mut m, tok) = lm();
+    let mut cache = m.new_cache(32).unwrap();
+    let (stats, _) = gen(
+        &mut m,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(6),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert!(stats.prefill_tokens_per_sec() > 0.0);
+    if stats.generated_tokens() >= 2 {
+        assert!(stats.decode_tokens_per_sec() > 0.0);
+    }
+}
+
+fn run_cli(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_sally-inference"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn stderr(o: &std::process::Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn cli_generate_runs_and_reports_stats() {
+    let tmp = TempFile::new(&lm_bytes());
+    let path = tmp.0.to_str().unwrap();
+    for extra in [&[][..], &["--chat"][..]] {
+        let mut args = vec![
+            "generate",
+            "--model",
+            path,
+            "--prompt",
+            "hello",
+            "--max-tokens",
+            "4",
+            "--temperature",
+            "0",
+            "--threads",
+            "1",
+        ];
+        args.extend_from_slice(extra);
+        let out = run_cli(&args);
+        assert_eq!(out.status.code(), Some(0), "{extra:?}: {}", stderr(&out));
+        let err = stderr(&out);
+        for needle in [
+            "architecture=llama",
+            "prompt_tokens=",
+            "generated_tokens=",
+            "prefill_tok_s=",
+            "decode_tok_s=",
+            "finish=",
+        ] {
+            assert!(err.contains(needle), "missing {needle} in {err}");
+        }
+    }
+}
+
+#[test]
+fn cli_generate_refuses_unsupported_architecture_with_exit_2() {
+    let cfg = lm_cfg();
+    let w = weights(&cfg, 3);
+    let mut b = GgufBuilder::new().kv_str("general.architecture", "glm_moe_dsa");
+    b = with_tokenizer(b);
+    for t in tensor_list(&cfg, &w) {
+        b = b.tensor(&t.name, &t.dims, t.ty, t.bytes);
+    }
+    let tmp = TempFile::new(&b.build());
+    let out = run_cli(&[
+        "generate",
+        "--model",
+        tmp.0.to_str().unwrap(),
+        "--prompt",
+        "hi",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = stderr(&out);
+    assert!(
+        err.contains("unsupported_architecture") && err.contains("glm_moe_dsa"),
+        "{err}"
+    );
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn cli_generate_refuses_oversized_request_without_truncating() {
+    let tmp = TempFile::new(&lm_bytes());
+    let out = run_cli(&[
+        "generate",
+        "--model",
+        tmp.0.to_str().unwrap(),
+        "--prompt",
+        "hi",
+        "--max-tokens",
+        "100000",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("resource_exhausted"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn cli_generate_usage_errors_exit_64() {
+    let tmp = TempFile::new(&lm_bytes());
+    let path = tmp.0.to_str().unwrap();
+    for args in [
+        vec!["generate", "--model", path],
+        vec!["generate", "--prompt", "x"],
+        vec![
+            "generate",
+            "--model",
+            path,
+            "--prompt",
+            "x",
+            "--temperature",
+            "hot",
+        ],
+        vec!["generate", "--model", path, "--prompt", "x", "--bogus", "1"],
+        vec!["generate", "--model", path, "--prompt"],
+        vec!["nonsense"],
+    ] {
+        let out = run_cli(&args);
+        assert_eq!(out.status.code(), Some(64), "{args:?}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn cli_generate_missing_file_is_an_error() {
+    let out = run_cli(&[
+        "generate",
+        "--model",
+        "/nonexistent/model.gguf",
+        "--prompt",
+        "x",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+}
+
+/// A model whose output is fixed: after the last prompt token it yields `script` in order
+/// (greedy sampling picks exactly those ids). Lets tests hit end-of-stream edge cases
+/// that random weights cannot reach on demand.
+struct Scripted {
+    script: Vec<u32>,
+    prompt_len: usize,
+    calls: usize,
+    logits: Vec<f32>,
+}
+
+impl Scripted {
+    fn new(script: &[u32], prompt_len: usize) -> Scripted {
+        Scripted {
+            script: script.to_vec(),
+            prompt_len,
+            calls: 0,
+            logits: vec![0.0; LM_VOCAB],
+        }
+    }
+}
+
+impl Architecture for Scripted {
+    fn forward(&mut self, _t: u32, _pos: usize, _s: &mut KvCache) -> Result<&[f32], EngineError> {
+        self.calls += 1;
+        self.logits.fill(-10.0);
+        if let Some(i) = self.calls.checked_sub(self.prompt_len) {
+            if let Some(next) = self.script.get(i) {
+                self.logits[*next as usize] = 10.0;
+            }
+        }
+        Ok(&self.logits)
+    }
+    fn context_len(&self) -> usize {
+        1024
+    }
+    fn kv_bytes(&self, _ctx: usize) -> usize {
+        0
+    }
+    fn vocab_size(&self) -> usize {
+        LM_VOCAB
+    }
+}
+
+fn scripted_run(script: &[u32], max_tokens: usize) -> (GenStats, String) {
+    let (_, tok) = lm();
+    let mut model = Scripted::new(script, PROMPT.len());
+    let mut cache = KvCache::new(1, 1, 1, 64);
+    gen(
+        &mut model,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(max_tokens),
+        &CancelToken::new(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn eos_ends_generation_and_is_not_emitted() {
+    // "hi", then <|eot_id|> (264), then text that must never appear.
+    let (stats, text) = scripted_run(&[104, 105, 264, 106, 107], 10);
+    assert_eq!(stats.finish, FinishReason::Stop);
+    assert_eq!(stats.tokens, vec![104, 105]);
+    assert_eq!(text, "hi");
+}
+
+#[test]
+fn max_tokens_stops_before_eos_is_reached() {
+    let (stats, text) = scripted_run(&[104, 105, 106, 264], 3);
+    assert_eq!(stats.finish, FinishReason::Length);
+    assert_eq!(stats.tokens, vec![104, 105, 106]);
+    assert_eq!(text, "hij");
+}
+
+#[test]
+fn text_is_held_until_a_multibyte_character_completes() {
+    // "€" is E2 82 AC. After the first two tokens nothing may be emitted yet.
+    let (_, tok) = lm();
+    let mut model = Scripted::new(&[0xE2, 0x82, 0xAC, 104], PROMPT.len());
+    let mut cache = KvCache::new(1, 1, 1, 64);
+    let mut pieces: Vec<String> = Vec::new();
+    generate(
+        &mut model,
+        &tok,
+        &mut cache,
+        &PROMPT,
+        &greedy(4),
+        &CancelToken::new(),
+        &mut |t| pieces.push(t.to_string()),
+    )
+    .unwrap();
+    assert_eq!(pieces, vec!["€".to_string(), "h".to_string()]);
+}
+
+#[test]
+fn incomplete_character_at_the_end_is_flushed_not_lost() {
+    // Generation ends after E2 82, the first two bytes of "€".
+    let (stats, text) = scripted_run(&[0xE2, 0x82], 2);
+    assert_eq!(stats.finish, FinishReason::Length);
+    assert_eq!(text, String::from_utf8_lossy(&[0xE2, 0x82]));
+    assert_eq!(text, "\u{FFFD}");
+}
