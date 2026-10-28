@@ -1,0 +1,52 @@
+#!/bin/sh
+# Smoke test for a running `sally-inference serve`. Needs only sh and curl.
+#   scripts/smoke-test-local-api [base-url]      (default http://127.0.0.1:8088)
+# Exit status is non-zero if any check fails.
+BASE=${1:-http://127.0.0.1:8088}
+FAILS=0
+pass() { printf 'PASS  %s\n' "$1"; }
+fail() { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS + 1)); }
+TMP=$(mktemp) || exit 2
+trap 'rm -f "$TMP"' EXIT
+
+# status <curl args...>: prints the HTTP status, body goes to $TMP ("000" = no connection).
+status() { curl -s -o "$TMP" -w '%{http_code}' "$@"; }
+post() { status -X POST -H 'Content-Type: application/json' --data "$1" "$BASE/v1/chat/completions"; }
+
+# 1. health
+s=$(status --max-time 5 "$BASE/health")
+if [ "$s" = 200 ] && grep -q '"model_loaded":true' "$TMP"; then pass "health"; else
+    fail "health (HTTP $s) - is the server running at $BASE?"
+    exit 1
+fi
+
+# 2. model id
+s=$(status --max-time 5 "$BASE/v1/models")
+MODEL=$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$TMP")
+if [ "$s" = 200 ] && [ -n "$MODEL" ]; then pass "models (id: $MODEL)"; else fail "models (HTTP $s)"; MODEL=""; fi
+
+# 3. a short completion with a non-empty answer
+s=$(post "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi.\"}],\"max_tokens\":8,\"temperature\":0}")
+ANSWER=$(sed -n 's/.*"message":{"content":"\([^"]*\)".*/\1/p' "$TMP")
+if [ "$s" = 200 ] && [ -n "$ANSWER" ]; then pass "chat completion (answer: $ANSWER)"; else fail "chat completion (HTTP $s, empty or missing answer): $(cat "$TMP")"; fi
+
+# 4. unsupported model is refused (404), not silently served
+s=$(post '{"model":"definitely-not-loaded","messages":[{"role":"user","content":"hi"}]}')
+if [ "$s" = 404 ]; then pass "unsupported model refused"; else fail "unsupported model (HTTP $s, wanted 404)"; fi
+
+# 5. memory/context limit: an oversized output request is refused with resource_exhausted
+s=$(post '{"messages":[{"role":"user","content":"hi"}],"max_tokens":100000000}')
+if [ "$s" = 400 ] && grep -q resource_exhausted "$TMP"; then pass "memory limit refused"; else fail "memory limit (HTTP $s, wanted 400 resource_exhausted)"; fi
+
+# 6. cancelled request: the client gives up mid-request; the server must stay healthy and serve the next one
+curl -s -o /dev/null --max-time 0.2 -X POST -H 'Content-Type: application/json' \
+    --data '{"messages":[{"role":"user","content":"Count slowly."}],"max_tokens":256,"temperature":0}' \
+    "$BASE/v1/chat/completions"
+s=$(post '{"messages":[{"role":"user","content":"Say hi."}],"max_tokens":4,"temperature":0}')
+if [ "$s" = 200 ]; then pass "server serves a request after a cancelled one"; else fail "after cancel (HTTP $s): $(cat "$TMP")"; fi
+
+# 7. engine stopped: a dead port must give a clear connection failure
+s=$(status --max-time 3 "http://127.0.0.1:1/health")
+if [ "$s" = 000 ]; then pass "stopped engine reports connection failure"; else fail "stopped engine (HTTP $s)"; fi
+
+if [ "$FAILS" -eq 0 ]; then echo "all checks passed"; else echo "$FAILS check(s) failed"; exit 1; fi

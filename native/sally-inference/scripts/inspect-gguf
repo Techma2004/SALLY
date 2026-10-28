@@ -1,0 +1,6 @@
+#!/bin/sh
+# Inspect a GGUF file: architecture, tensor types, sizes, key metadata.
+# Exit codes: 0 ok, 1 I/O error, 2 invalid/unsupported model.
+set -eu
+cd "$(dirname "$0")/.."
+exec cargo run --quiet --release -- inspect "$@"

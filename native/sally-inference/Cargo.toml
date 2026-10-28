@@ -1,0 +1,21 @@
+[package]
+name = "sally-inference"
+version = "0.1.0"
+edition = "2021"
+description = "SALLY local inference engine"
+
+[lib]
+name = "sally_inference"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sally-inference"
+path = "src/main.rs"
+
+[dependencies]
+memmap2 = "0.9.12"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tiny_http = { version = "0.12.0", default-features = false }
+
+[workspace]
