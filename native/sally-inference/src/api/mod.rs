@@ -11,7 +11,7 @@ use crate::error::EngineError;
 use crate::generate::GenParams;
 use crate::scheduler::{Engine, Event, Job, Scheduler};
 use crate::tokenizer::Tokenizer;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -211,7 +211,24 @@ fn error_response(e: &ApiError) -> Reply {
     r
 }
 
+/// A streaming response whose job is already queued; written by `stream_response`.
+struct StreamPlan {
+    rx: std::sync::mpsc::Receiver<Event>,
+    cancel: CancelToken,
+    id: String,
+    created: u64,
+    model: String,
+    deadline: Instant,
+    timeout_secs: u64,
+}
+
+enum Chat {
+    Json(Reply, usize),
+    Stream(StreamPlan),
+}
+
 struct Outcome {
+    stream: Option<StreamPlan>,
     reply: Result<Reply, ApiError>,
     prompt_tokens: Option<usize>,
     completion_tokens: Option<usize>,
@@ -220,6 +237,7 @@ struct Outcome {
 impl Outcome {
     fn plain(reply: Result<Reply, ApiError>) -> Outcome {
         Outcome {
+            stream: None,
             reply,
             prompt_tokens: None,
             completion_tokens: None,
@@ -233,7 +251,18 @@ fn handle(shared: &Shared, mut request: Request) {
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("").to_string();
 
-    let out = route(shared, &mut request, &method, &path);
+    let mut out = route(shared, &mut request, &method, &path);
+    if let Some(plan) = out.stream.take() {
+        let (completion, outcome) = stream_response(request, plan);
+        let line = serde_json::json!({
+            "event": "request", "method": method.as_str(), "path": path, "status": 200,
+            "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+            "prompt_tokens": out.prompt_tokens, "completion_tokens": completion,
+            "stream": outcome,
+        });
+        (shared.opts.log)(&line.to_string());
+        return;
+    }
     let (status, reply) = match out.reply {
         Ok(r) => (r.status_code().0, r),
         Err(e) => (e.status, error_response(&e)),
@@ -307,12 +336,20 @@ fn chat(shared: &Shared, request: &mut Request) -> Outcome {
     let mut prompt_tokens = None;
     let result = chat_inner(shared, request, &mut prompt_tokens);
     match result {
-        Ok((reply, completion)) => Outcome {
+        Ok(Chat::Json(reply, completion)) => Outcome {
+            stream: None,
             reply: Ok(reply),
             prompt_tokens,
             completion_tokens: Some(completion),
         },
+        Ok(Chat::Stream(plan)) => Outcome {
+            stream: Some(plan),
+            reply: Err(ApiError::invalid("internal: stream placeholder")),
+            prompt_tokens,
+            completion_tokens: None,
+        },
         Err(e) => Outcome {
+            stream: None,
             reply: Err(e),
             prompt_tokens,
             completion_tokens: None,
@@ -324,7 +361,7 @@ fn chat_inner(
     shared: &Shared,
     request: &mut Request,
     prompt_tokens: &mut Option<usize>,
-) -> Result<(Reply, usize), ApiError> {
+) -> Result<Chat, ApiError> {
     let opts = &shared.opts;
     let body = read_body(shared, request)?;
     let req = types::parse_chat_request(&body)?;
@@ -386,6 +423,18 @@ fn chat_inner(
         })?;
 
     let deadline = Instant::now() + opts.request_timeout;
+    if req.stream {
+        let id = format!("chatcmpl-{}", shared.next_id.fetch_add(1, Ordering::SeqCst));
+        return Ok(Chat::Stream(StreamPlan {
+            rx,
+            cancel,
+            id,
+            created: now.as_secs(),
+            model: opts.model_id.clone(),
+            deadline,
+            timeout_secs: opts.request_timeout.as_secs(),
+        }));
+    }
     let mut text = String::new();
     let stats = loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -422,5 +471,62 @@ fn chat_inner(
         names.sort();
         reply = reply.with_header(header("X-Sally-Ignored-Fields", &names.join(",")));
     }
-    Ok((reply, completion))
+    Ok(Chat::Json(reply, completion))
+}
+
+/// Writes the SSE stream with chunked transfer encoding (so the connection stays valid for
+/// tiny_http's keep-alive handling); each event is its own chunk, flushed at once.
+/// A write error means the client is gone: the job is cancelled so its KV cache is freed.
+/// Returns (completion tokens, "done" | "client_disconnected" | "timeout" | "error").
+fn stream_response(request: Request, plan: StreamPlan) -> (usize, &'static str) {
+    let mut w = request.into_writer();
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n";
+    let send = |w: &mut dyn Write, payload: &str| -> std::io::Result<()> {
+        let event = format!("data: {payload}\n\n");
+        w.write_all(format!("{:x}\r\n{event}\r\n", event.len()).as_bytes())?;
+        w.flush()
+    };
+    let chunk = |delta: serde_json::Value, finish: Option<&str>| {
+        types::chunk_json(&plan.id, plan.created, &plan.model, delta, finish)
+    };
+    let first = w
+        .write_all(head.as_bytes())
+        .and_then(|_| send(&mut *w, &chunk(serde_json::json!({"role": "assistant"}), None)));
+    if first.is_err() {
+        plan.cancel.cancel();
+        return (0, "client_disconnected");
+    }
+    let mut completion = 0usize;
+    loop {
+        let left = plan.deadline.saturating_duration_since(Instant::now());
+        let (payload, last, outcome) = match plan.rx.recv_timeout(left) {
+            Ok(Event::Text(t)) => {
+                completion += 1;
+                (chunk(serde_json::json!({"content": t}), None), false, "done")
+            }
+            Ok(Event::Done(s)) => {
+                completion = s.generated_tokens();
+                (chunk(serde_json::json!({}), Some(s.finish.as_str())), true, "done")
+            }
+            Ok(Event::Failed(e)) => (ApiError::from_engine(&e).body(), true, "error"),
+            Err(RecvTimeoutError::Timeout) => {
+                plan.cancel.cancel();
+                (ApiError::timeout(plan.timeout_secs).body(), true, "timeout")
+            }
+            Err(RecvTimeoutError::Disconnected) => (
+                ApiError::from_engine(&EngineError::Internal("the worker dropped the request".into())).body(),
+                true,
+                "error",
+            ),
+        };
+        if send(&mut *w, &payload).is_err() {
+            plan.cancel.cancel();
+            return (completion, "client_disconnected");
+        }
+        if last {
+            let _ = send(&mut *w, "[DONE]");
+            let _ = w.write_all(b"0\r\n\r\n").and_then(|_| w.flush());
+            return (completion, outcome);
+        }
+    }
 }

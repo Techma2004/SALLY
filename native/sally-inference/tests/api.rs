@@ -307,7 +307,7 @@ fn unsupported_parameters_are_refused_not_silently_ignored() {
         ("stop", json!(["\n"])),
         ("logit_bias", json!({"1": 5})),
         ("n", json!(2)),
-        ("stream", json!(true)),
+        ("stream", json!("yes")),
         ("frequency_penalty", json!(0.5)),
         ("presence_penalty", json!(0.5)),
     ] {
@@ -507,4 +507,125 @@ fn shutdown_finishes_the_running_request_then_stops_listening() {
     r.server.shutdown();
     assert_eq!(gen.join().unwrap().status, 200, "in-flight request must complete");
     assert!(TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_err());
+}
+
+// ---- streaming ----
+
+/// Reads the whole response, recording when each read returned.
+fn read_timed(s: &mut TcpStream) -> (Vec<(Instant, usize)>, String) {
+    let mut raw = Vec::new();
+    let mut marks = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match s.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                marks.push((Instant::now(), raw.len()));
+                if raw.ends_with(b"0\r\n\r\n") {
+                    break; // the terminating chunk
+                }
+            }
+        }
+    }
+    (marks, String::from_utf8_lossy(&raw).into_owned())
+}
+
+fn open_stream(addr: SocketAddr, max_tokens: u64) -> TcpStream {
+    let body = json!({"messages": [{"role": "user", "content": "hello"}], "max_tokens": max_tokens, "temperature": 0, "stream": true}).to_string();
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let req = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).unwrap();
+    s
+}
+
+fn sse_events(text: &str) -> Vec<String> {
+    let mut rest = text.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("");
+    let mut body = String::new();
+    // De-chunk: "<hex size>\r\n<data>\r\n" ... "0\r\n\r\n".
+    while let Some((size, tail)) = rest.split_once("\r\n") {
+        let n = usize::from_str_radix(size, 16).expect("chunk size");
+        if n == 0 {
+            break;
+        }
+        body.push_str(&tail[..n]);
+        rest = &tail[n + 2..];
+    }
+    body.split("\n\n")
+        .filter_map(|e| e.strip_prefix("data: ").map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn stream_emits_incremental_chunks_then_done() {
+    let r = start(Opts {
+        delay_ms: 25,
+        ..Opts::default()
+    });
+    let t0 = Instant::now();
+    let mut s = open_stream(r.server.addr(), 6);
+    let (marks, text) = read_timed(&mut s);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(text.to_lowercase().contains("content-type: text/event-stream"), "{text}");
+    assert!(text.to_lowercase().contains("transfer-encoding: chunked"), "{text}");
+    let events = sse_events(&text);
+    assert_eq!(events.last().unwrap(), "[DONE]");
+    let chunks: Vec<Value> = events[..events.len() - 1].iter().map(|e| serde_json::from_str(e).unwrap()).collect();
+    assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+    assert_eq!(chunks[0]["object"], "chat.completion.chunk");
+    let last = chunks.last().unwrap();
+    assert!(["stop", "length"].contains(&last["choices"][0]["finish_reason"].as_str().unwrap()));
+    let streamed: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["content"].as_str()).collect();
+    // Same text as the non-streaming answer for the same greedy request.
+    let plain = chat(r.server.addr(), hello(6)).json();
+    assert_eq!(streamed, plain["choices"][0]["message"]["content"].as_str().unwrap());
+    // Incremental: data arrived in several reads, spread over the generation time.
+    assert!(marks.len() >= 3, "only {} reads", marks.len());
+    let first_read = marks[0].0.duration_since(t0);
+    let end = marks.last().unwrap().0.duration_since(t0);
+    assert!(end - first_read > Duration::from_millis(60), "all data arrived at once: {first_read:?}..{end:?}");
+}
+
+#[test]
+fn stream_errors_before_generation_are_plain_json() {
+    let r = start(Opts::default());
+    let body = json!({"messages": [{"role": "user", "content": "hello"}], "max_tokens": 500, "stream": true});
+    assert_error(&chat(r.server.addr(), body), 400, "resource_exhausted");
+}
+
+#[test]
+fn disconnect_cancels_and_frees_kv_and_the_next_request_works() {
+    let r = start(Opts {
+        delay_ms: 40,
+        ..Opts::default()
+    });
+    let addr = r.server.addr();
+    let mut s = open_stream(addr, 30); // prompt 30 + 30 fits the 64-token context
+    // Read until the first content chunk, then vanish.
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !String::from_utf8_lossy(&seen).contains("\"content\"") {
+        let n = s.read(&mut buf).unwrap();
+        assert!(n > 0, "stream ended early");
+        seen.extend_from_slice(&buf[..n]);
+    }
+    let calls_at_disconnect = r.calls.load(Ordering::SeqCst);
+    let t = Instant::now();
+    drop(s);
+    while r.budget.used() != 0 {
+        assert!(t.elapsed() < Duration::from_secs(3), "KV cache not freed after disconnect");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    eprintln!("cancellation latency after disconnect: {:?}", t.elapsed());
+    assert!(
+        r.calls.load(Ordering::SeqCst) < calls_at_disconnect + 10,
+        "generation kept running: {} -> {}",
+        calls_at_disconnect,
+        r.calls.load(Ordering::SeqCst)
+    );
+    assert_eq!(chat(addr, hello(4)).status, 200);
 }

@@ -99,3 +99,11 @@ The budget is `--memory-mb` (default 2048). It bounds the engine's own working m
 Honest limits: the budget does not cover allocator overhead, thread stacks or the OS page cache, and a model whose weights do not fit in RAM will run, but from disk, slowly. Nothing is swapped to hide this.
 
 Verified by tests: reservations are released on drop and are atomic across threads; an oversized KV cache is refused naming the bytes needed and the context that would fit; RSS tracks a real 64 MiB allocation; 20 repeated requests grow RSS by less than 5% after warm-up (checked to fail when a 256 KiB/request leak is injected); logs carry no request text.
+
+## Streaming and cancellation (measured)
+
+`stream: true` returns Server-Sent Events over chunked transfer encoding (`data: {chunk}` events ending with `data: [DONE]`); errors found before generation starts (validation, full queue, context overflow) are still ordinary JSON errors with their normal status. When the client disconnects, the write fails, the job is cancelled between tokens and its KV reservation is released.
+
+Measured on the synthetic tiny model with an injected 40 ms per forward step (test `disconnect_cancels_and_frees_kv_and_the_next_request_works`): the budget returned to zero 187 ms after the client closed the socket (about one to four token steps), and the next request succeeded. With a real model the latency is one token step (the loop checks cancellation between tokens), so it scales with decode time per token; prefill is also token-by-token, so a cancel during a long prompt takes effect after the current token. Not yet measured on the real 1B model.
+
+Known gap: a streamed request that times out mid-stream ends with an error event and `[DONE]`; this path is implemented but has no dedicated test (the non-streaming timeout path does).

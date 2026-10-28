@@ -27,11 +27,11 @@ only to the `openai-api` provider.
 |---|---|
 | At least 64,000 tokens of context for agent use; smaller windows are rejected at startup | Default context is 2048 and is bounded by memory (KV cache is f32). Llama-3.2-1B at 64k needs roughly 4 GiB of KV cache, far over a 3.7 GiB machine's budget. |
 | Tool calling | Not implemented; `tools` is refused with a 400 naming the parameter. |
-| Streaming | Not implemented yet (Task 9); `stream: true` is refused. |
+| Streaming | Implemented (SSE, chunked); not tested with Hermes itself. |
 
 So Hermes **cannot currently use this server for its agent mode**. What works today is
-plain, non-streaming chat completions (for example via `curl` or any simple OpenAI
-client). Closing the gap requires streaming (Task 9), tool-call support, and a way to
+plain and streaming chat completions (for example via `curl` or any simple OpenAI
+client). Closing the gap requires tool-call support and a way to
 reach a 64k context in the available memory (quantised KV cache); none of these are
 done, and none are promised by this document.
 

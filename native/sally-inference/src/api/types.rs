@@ -120,6 +120,7 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub seed: Option<u64>,
+    pub stream: bool,
     /// Unknown fields that were tolerated, sorted.
     pub ignored: Vec<String>,
 }
@@ -145,8 +146,8 @@ fn check_unsupported(obj: &Map<String, Value>) -> Result<(), ApiError> {
             "logit_bias" | "top_logprobs" => return Err(refuse(k, "not implemented")),
             "stop" => return Err(refuse(k, "stop sequences are not implemented")),
             "n" if v.as_u64() != Some(1) => return Err(refuse(k, "only n = 1 is supported")),
-            "stream" if v.as_bool() != Some(false) => {
-                return Err(refuse(k, "streaming is not available yet"))
+            "stream" if v.as_bool().is_none() => {
+                return Err(ApiError::invalid("\"stream\" must be a boolean"))
             }
             "logprobs" if v.as_bool() != Some(false) => return Err(refuse(k, "not implemented")),
             "frequency_penalty" | "presence_penalty" if v.as_f64() != Some(0.0) => {
@@ -287,6 +288,7 @@ pub fn parse_chat_request(body: &[u8]) -> Result<ChatRequest, ApiError> {
         temperature: number(obj, "temperature", 0.0, 2.0, false)?,
         top_p: number(obj, "top_p", 0.0, 1.0, true)?,
         seed,
+        stream: obj.get("stream").and_then(Value::as_bool).unwrap_or(false),
         ignored,
     })
 }
@@ -329,6 +331,18 @@ pub fn completion_json(c: &Completion<'_>) -> String {
             "completion_tokens": c.completion_tokens,
             "total_tokens": c.prompt_tokens + c.completion_tokens
         }
+    })
+    .to_string()
+}
+
+/// One `chat.completion.chunk` SSE payload. `delta` is the JSON delta object.
+pub fn chunk_json(id: &str, created: u64, model: &str, delta: Value, finish: Option<&str>) -> String {
+    json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
     })
     .to_string()
 }
