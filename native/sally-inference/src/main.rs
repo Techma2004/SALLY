@@ -23,6 +23,7 @@ const USAGE: &str = "usage:
   sally-inference generate --model <model.gguf> --prompt <text> [--chat]
       [--max-tokens N] [--temperature T] [--top-k K] [--top-p P] [--seed S]
       [--threads N] [--context N] [--memory-mb N] [--log-json]
+  sally-inference bench <model.gguf> [--context N] [--threads N] [--memory-mb N]
   sally-inference qualify <model.gguf> [--context N] [--memory-mb N]
   sally-inference serve --model <model.gguf> [--bind 127.0.0.1:8088] [--context N]
       [--memory-mb N] [--queue N] [--max-output-tokens N] [--timeout-secs N]
@@ -289,6 +290,29 @@ fn run_serve(overrides: &[(String, String)]) -> Result<(), EngineError> {
     }
 }
 
+fn run_bench(path: &str, rest: &[String]) -> Result<u8, String> {
+    let mut overrides = Vec::new();
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        let key = match flag.as_str() {
+            "--context" => "context_len",
+            "--threads" => "threads",
+            "--memory-mb" => "memory_budget_mb",
+            other => return Err(format!("unknown option {other}")),
+        };
+        let v = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        overrides.push((key.to_string(), v.clone()));
+    }
+    let cfg = Config::load(None, &overrides).map_err(|e| e.to_string())?;
+    match sally_inference::bench::run(Path::new(path), &cfg, &mut |line| println!("{line}")) {
+        Ok(()) => Ok(0),
+        Err(e) => {
+            eprintln!("error [{}]: {e}", e.code());
+            Ok(exit_code(&e))
+        }
+    }
+}
+
 fn run_qualify(path: &str, rest: &[String]) -> Result<u8, String> {
     let mut overrides = Vec::new();
     let mut it = rest.iter();
@@ -329,6 +353,10 @@ fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             },
+            Err(msg) => usage_error(&msg),
+        },
+        [cmd, path, rest @ ..] if cmd == "bench" => match run_bench(path, rest) {
+            Ok(code) => ExitCode::from(code),
             Err(msg) => usage_error(&msg),
         },
         [cmd, path, rest @ ..] if cmd == "qualify" => match run_qualify(path, rest) {

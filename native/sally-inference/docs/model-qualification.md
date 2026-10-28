@@ -141,3 +141,22 @@ Why it does not qualify:
 What would have to exist first (none is planned in this phase): a verified MoE adapter, expert streaming with a measured cache hit rate, latent attention, and sparse attention checked against a reference. Each would need its own spec.
 
 Sources: aiweekly.co/alerts/unsloth-quantizes-glm-52s-151tb-to-217gb-for-local-inference; unsloth.ai/docs/models/glm-5.2; apidog.com/blog/glm-5-2-what-is; houdao.com/d/14441-Zhipu-GLM5-2-Deployment-Guide-Hardware-vLLM-SGLang-for-the-744B-MoE-Model; docs.api.nvidia.com/nim/reference/z-ai-glm-5.2.
+
+## Benchmarks
+
+```sh
+cargo build --release
+./target/release/sally-inference bench models/llama-3.2-1b-instruct-q4_k_m.gguf --context 2048 --threads 2 > bench.jsonl
+```
+
+One JSON object per row: `load`, `short_prompt_first_run` (pays for paging weights in), `short_prompt_warm`, `long_prompt` (half the context, plain text), `repeated_generation` (RSS after each of 5 runs and percentage growth first to last), `cancellation` (cancel after the third piece; `cancel_to_return_ms`). Rows carry threads, context, current and peak RSS. Greedy decoding, so runs are repeatable. For a truly cold first run, drop the OS page cache before it (`sync; echo 3 | sudo tee /proc/sys/vm/drop_caches`); the tool does not do that itself.
+
+### Results
+
+**Real model on the target machine: not measured yet.** Run the command above on the 3.7 GB Debian machine and paste the rows here, labelled with the CPU model and `MemTotal`.
+
+Smoke run, for confirming the tool works only (synthetic tiny model, debug build, 2-core Xeon VM at 2.1 GHz, 8 GB RAM; these figures say nothing about real models): load 0.8 ms; prefill about 430-460 tok/s; decode about 410-460 tok/s; RSS flat across 5 repeated runs (0.0% growth); cancellation returned immediately after the third piece.
+
+### Tuning
+
+None done. Tuning one stated metric at a time needs real-model numbers first, so no change was made on guesses. Known limits to examine once there are numbers: scalar (non-SIMD) kernels, a thread spawn per matrix-vector product, and token-by-token prefill. A change is kept only if its stated metric improves on the target machine and the kernel and generation tests still pass.

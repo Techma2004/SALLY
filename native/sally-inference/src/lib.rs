@@ -1,6 +1,7 @@
 pub mod api;
 pub mod architecture;
 pub mod backend;
+pub mod bench;
 pub mod cancel;
 pub mod config;
 pub mod error;
