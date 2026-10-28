@@ -10,7 +10,7 @@ use crate::memory::{open_cache, Budget};
 use crate::tokenizer::Tokenizer;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{sync_channel, Sender, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 /// Everything the worker needs to serve requests.
@@ -39,8 +39,8 @@ pub enum Event {
 }
 
 pub struct Scheduler {
-    tx: Option<SyncSender<Job>>,
-    worker: Option<JoinHandle<()>>,
+    tx: Mutex<Option<SyncSender<Job>>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Scheduler {
@@ -57,14 +57,15 @@ impl Scheduler {
             })
             .expect("failed to spawn the worker thread");
         Scheduler {
-            tx: Some(tx),
-            worker: Some(worker),
+            tx: Mutex::new(Some(tx)),
+            worker: Mutex::new(Some(worker)),
         }
     }
 
     /// Queues a job, or fails immediately with `resource_exhausted` if the queue is full.
     pub fn submit(&self, job: Job) -> Result<(), EngineError> {
-        let Some(tx) = &self.tx else {
+        let guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(tx) = guard.as_ref() else {
             return Err(EngineError::Internal("the scheduler is shut down".into()));
         };
         tx.try_send(job).map_err(|e| match e {
@@ -78,9 +79,10 @@ impl Scheduler {
     }
 
     /// Stops accepting jobs, lets queued and running jobs finish, then joins the worker.
-    pub fn shutdown(&mut self) {
-        self.tx = None;
-        if let Some(w) = self.worker.take() {
+    pub fn shutdown(&self) {
+        *self.tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let worker = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(w) = worker {
             let _ = w.join();
         }
     }

@@ -1,3 +1,4 @@
+pub mod api;
 pub mod architecture;
 pub mod backend;
 pub mod cancel;

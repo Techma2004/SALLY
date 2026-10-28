@@ -264,7 +264,7 @@ fn a_panicking_job_does_not_kill_the_worker() {
 
 #[test]
 fn shutdown_lets_the_running_job_finish_and_then_refuses_new_ones() {
-    let mut r = rig(2, 10);
+    let r = rig(2, 10);
     let (a, rx_a, _) = job(&PROMPT, 3);
     r.sched.submit(a).unwrap();
     r.started.recv_timeout(Duration::from_secs(10)).unwrap();

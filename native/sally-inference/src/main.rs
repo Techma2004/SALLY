@@ -1,3 +1,4 @@
+use sally_inference::api::{self, ApiOptions};
 use sally_inference::architecture::llama::LlamaModel;
 use sally_inference::architecture::Architecture;
 use sally_inference::cancel::CancelToken;
@@ -6,6 +7,7 @@ use sally_inference::error::EngineError;
 use sally_inference::generate::{generate, GenParams};
 use sally_inference::gguf::GgufFile;
 use sally_inference::memory::{fmt_bytes, open_cache, Budget};
+use sally_inference::scheduler::Engine;
 use sally_inference::model_registry;
 use sally_inference::telemetry::{mem_available_bytes, peak_rss_bytes, Metrics};
 use sally_inference::tensor_store::TensorStore;
@@ -13,13 +15,17 @@ use sally_inference::tokenizer::{ChatMessage, Tokenizer};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Instant;
 
 const USAGE: &str = "usage:
   sally-inference inspect <model.gguf>
   sally-inference generate --model <model.gguf> --prompt <text> [--chat]
       [--max-tokens N] [--temperature T] [--top-k K] [--top-p P] [--seed S]
-      [--threads N] [--context N] [--memory-mb N] [--log-json]";
+      [--threads N] [--context N] [--memory-mb N] [--log-json]
+  sally-inference serve --model <model.gguf> [--bind 127.0.0.1:8088] [--context N]
+      [--memory-mb N] [--queue N] [--max-output-tokens N] [--timeout-secs N]
+      [--threads N] [--max-body-bytes N]   (loopback addresses only)";
 
 /// 0 ok; 1 I/O, resource or internal error; 2 invalid/unsupported model; 64 usage.
 fn exit_code(e: &EngineError) -> u8 {
@@ -196,6 +202,92 @@ fn run_generate(a: GenerateArgs) -> Result<(), EngineError> {
     Ok(())
 }
 
+fn parse_serve(args: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    let mut have_model = false;
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let key = match flag.as_str() {
+            "--model" => {
+                have_model = true;
+                "model_path"
+            }
+            "--bind" => "bind",
+            "--context" => "context_len",
+            "--memory-mb" => "memory_budget_mb",
+            "--queue" => "queue_len",
+            "--max-output-tokens" => "max_output_tokens",
+            "--timeout-secs" => "request_timeout_secs",
+            "--threads" => "threads",
+            "--max-body-bytes" => "max_body_bytes",
+            other => return Err(format!("unknown option {other}")),
+        };
+        let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        out.push((key.to_string(), value.clone()));
+    }
+    if !have_model {
+        return Err("--model is required".into());
+    }
+    Ok(out)
+}
+
+fn run_serve(overrides: &[(String, String)]) -> Result<(), EngineError> {
+    let cfg = Config::load(None, overrides)?;
+    let file = GgufFile::open(&cfg.model_path)?;
+    let arch = file.architecture().unwrap_or("").to_string();
+    model_registry::lookup(&arch)?;
+    let tok = Tokenizer::from_gguf(&file.metadata)?;
+    let store = TensorStore::open(&file, &cfg.model_path)?;
+    let model = LlamaModel::load(store, &file.metadata, cfg.threads)?;
+    let ctx = cfg.context_len.min(model.context_len());
+
+    let weight_bytes: u64 = file.tensors.iter().map(|t| t.n_bytes).sum();
+    let budget = Budget::new(cfg.memory_budget_mb.saturating_mul(1024 * 1024));
+    let _scratch = budget.reserve("scratch buffers", model.scratch_bytes())?;
+    // Fail at startup, not on the first request, if one request's cache cannot fit.
+    drop(open_cache(&model, ctx, &budget)?);
+    eprintln!(
+        "[sally] memory: weights_mapped={} kv_cache_per_request={} scratch={} budget={}",
+        fmt_bytes(weight_bytes as usize),
+        fmt_bytes(model.kv_bytes(ctx)),
+        fmt_bytes(model.scratch_bytes()),
+        fmt_bytes(budget.limit()),
+    );
+    if let Some(avail) = mem_available_bytes() {
+        if weight_bytes > avail {
+            eprintln!(
+                "[sally] warning: weights ({}) exceed available memory ({}); they are memory-mapped \
+                 and will be paged from disk, so expect slow generation.",
+                fmt_bytes(weight_bytes as usize),
+                fmt_bytes(avail as usize),
+            );
+        }
+    }
+    let model_id = cfg
+        .model_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("local-model")
+        .to_string();
+    let engine = Engine {
+        model: Box::new(model),
+        tok: Arc::new(tok),
+        budget,
+        ctx,
+    };
+    let opts = ApiOptions::from_config(&cfg, model_id.clone(), ctx);
+    let server = api::start(engine, &cfg, opts)?;
+    eprintln!(
+        "[sally] serving {model_id} at http://{}/v1 (context={ctx}, queue={}, timeout={}s); Ctrl-C to stop",
+        server.addr(),
+        cfg.queue_len,
+        cfg.request_timeout_secs
+    );
+    loop {
+        std::thread::park();
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
@@ -208,6 +300,13 @@ fn main() -> ExitCode {
         },
         [cmd, rest @ ..] if cmd == "generate" => match parse_generate(rest) {
             Ok(a) => match run_generate(a) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(&e),
+            },
+            Err(msg) => usage_error(&msg),
+        },
+        [cmd, rest @ ..] if cmd == "serve" => match parse_serve(rest) {
+            Ok(o) => match run_serve(&o) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             },
