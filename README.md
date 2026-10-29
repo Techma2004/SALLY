@@ -194,6 +194,10 @@ LLM_N_GPU_LAYERS=0
 LLM_TEMPERATURE=0.4
 LLM_MAX_TOKENS=256
 LLM_VERBOSE=false
+# Optional: use the local Rust engine instead of in-process llama-cpp-python.
+# LLM_PROVIDER=engine
+# LLM_ENGINE_URL=http://127.0.0.1:8088/v1
+# LLM_ENGINE_TIMEOUT_S=600
 
 # AGENT RUNTIME
 AGENT_MAX_STEPS=3
@@ -238,6 +242,20 @@ WHISPER_MODEL_SIZE=tiny
 Never commit local secrets, databases, model files, or private runtime state.
 
 The repository's ignore rules cover the private environment and large model/database artifacts.
+
+### Using the Rust inference engine (optional)
+
+`native/sally-inference` is a separate local server. To make the web UI use it:
+
+```bash
+cd native/sally-inference && cargo build --release
+./target/release/sally-inference serve --model ../../models/llama-3.2-1b-instruct-q4_k_m.gguf \
+    --context 2048 --timeout-secs 900
+# in another terminal, from the repo root:
+LLM_PROVIDER=engine uv run python main.py
+```
+
+Normal chat works through the engine. Agent mode and `INTENT_LLM` need JSON-constrained decoding, which the engine does not have yet; with `LLM_PROVIDER=engine` they fail with a clear error. Leave `LLM_PROVIDER` unset to keep the default in-process model. See `native/sally-inference/docs/model-qualification.md` for measured speed.
 
 ## Usage
 
