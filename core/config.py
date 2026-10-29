@@ -47,6 +47,11 @@ class LLMSettings:
     temperature: float
     max_tokens: int
     verbose: bool
+    # "llama_cpp" runs the model in-process; "engine" calls the local
+    # sally-inference server (native/sally-inference) over HTTP.
+    provider: str = "llama_cpp"
+    engine_url: str = "http://127.0.0.1:8088/v1"
+    engine_timeout_s: float = 600.0
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,9 @@ def get_settings() -> Settings:
             temperature=_float("LLM_TEMPERATURE", 0.4),
             max_tokens=_int("LLM_MAX_TOKENS", 256),
             verbose=_bool("LLM_VERBOSE", False),
+            provider=_env("LLM_PROVIDER", "llama_cpp").strip().lower(),
+            engine_url=_env("LLM_ENGINE_URL", "http://127.0.0.1:8088/v1").rstrip("/"),
+            engine_timeout_s=_float("LLM_ENGINE_TIMEOUT_S", 600.0),
         ),
         agent=AgentSettings(
             max_steps=_int("AGENT_MAX_STEPS", 3),
