@@ -216,7 +216,7 @@ fn top_processes(py: Python<'_>, limit: usize) -> PyResult<Vec<Py<PyAny>>> {
 fn cpu_percent(py: Python<'_>, sample_ms: u64) -> f32 {
     let window = Duration::from_millis(sample_ms).max(MINIMUM_CPU_UPDATE_INTERVAL);
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_cpu_usage()),
         );
