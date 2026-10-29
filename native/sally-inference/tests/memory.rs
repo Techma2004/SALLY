@@ -169,7 +169,10 @@ fn rss_tracks_a_real_allocation() {
     for i in (0..big.len()).step_by(4096) {
         big[i] = 1; // touch every page so it becomes resident
     }
+    // Without black_box an optimised build removes the whole allocation as dead code.
+    std::hint::black_box(&mut big);
     let after = rss_bytes().unwrap();
+    std::hint::black_box(&big);
     assert!(
         after >= before + 48 * 1024 * 1024,
         "RSS did not reflect a 64 MiB allocation: {before} -> {after}"
